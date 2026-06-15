@@ -41,6 +41,8 @@ model Remains {
   status               String   @default("REGISTERED")
   storageRequirement   String
   expectedCeremonyTime DateTime?
+  expectedAttendees    Int      @default(50)
+  ceremonyPreference   String?
   cabinetId            String?
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
@@ -90,6 +92,7 @@ model Ceremony {
   endTime          DateTime
   status           String   @default("PENDING")
   familyPreference String?
+  allocationReason String?
   approvedBy       String?
   approvedAt       DateTime?
   createdAt        DateTime @default(now())
@@ -121,6 +124,7 @@ model Cremation {
   emissionLevel Float?
   sequence      Int
   status        String   @default("QUEUED")
+  sortReason    String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
   remains       Remains         @relation(fields: [remainsId], references: [id])
@@ -230,6 +234,7 @@ model ShiftRequest {
 
 model Notification {
   id        String   @id @default(uuid())
+  userId    String?
   type      String
   title     String
   content   String

@@ -14,6 +14,9 @@ import {
   Col,
   Card,
   Descriptions,
+  Tabs,
+  Input,
+  Alert,
 } from 'antd';
 import {
   DollarOutlined,
@@ -21,6 +24,8 @@ import {
   CreditCardOutlined,
   WarningOutlined,
   EyeOutlined,
+  PlusOutlined,
+  SearchOutlined,
 } from '@ant-design/icons';
 import { paymentApi } from '../../api/endpoints';
 import { Payment, PAYMENT_STATUS_MAP, PAYMENT_METHOD_MAP, FeeRecord } from '../../types';
@@ -28,6 +33,7 @@ import dayjs from 'dayjs';
 
 const { Title } = Typography;
 const { Option } = Select;
+const { TabPane } = Tabs;
 
 const paymentStatusColorMap: Record<string, string> = {
   UNPAID: 'red',
@@ -45,25 +51,44 @@ const feeCategoryMap: Record<string, string> = {
   OTHER: '其他费用',
 };
 
+const remainsStatusMap: Record<string, string> = {
+  REGISTERED: '已登记',
+  IN_STORAGE: '冷藏中',
+  CEREMONY_SCHEDULED: '已排告别',
+  IN_CEREMONY: '告别中',
+  CEREMONY_COMPLETED: '告别完成',
+  AWAITING_CREMATION: '待火化',
+  IN_CREMATION: '火化中',
+  CREMATED: '已火化',
+};
+
 const PaymentList = () => {
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<Payment[]>([]);
+  const [remainsToBill, setRemainsToBill] = useState<any[]>([]);
   const [overdueList, setOverdueList] = useState<any[]>([]);
   const [payVisible, setPayVisible] = useState(false);
   const [payId, setPayId] = useState<string>('');
   const [detailVisible, setDetailVisible] = useState(false);
   const [detail, setDetail] = useState<Payment | null>(null);
+  const [previewVisible, setPreviewVisible] = useState(false);
+  const [previewRemains, setPreviewRemains] = useState<any>(null);
+  const [previewFees, setPreviewFees] = useState<any>(null);
   const [payForm] = Form.useForm();
+  const [searchText, setSearchText] = useState('');
+  const [activeTab, setActiveTab] = useState('bills');
 
   const loadData = async () => {
     setLoading(true);
     try {
-      const [list, overdue] = await Promise.all([
+      const [list, overdue, toBill] = await Promise.all([
         paymentApi.getPayments(),
         paymentApi.getOverduePayments(),
+        paymentApi.getRemainsToBill(),
       ]);
       setData(list as Payment[]);
       setOverdueList(overdue as any[]);
+      setRemainsToBill(toBill as any[]);
     } finally {
       setLoading(false);
     }
@@ -81,15 +106,26 @@ const PaymentList = () => {
     } catch (e) {}
   };
 
-  const handleGenerate = async (remainsId: string) => {
+  const handlePreviewBill = async (remains: any) => {
+    try {
+      setPreviewRemains(remains);
+      const res: any = await paymentApi.calculate(remains.id);
+      setPreviewFees(res);
+      setPreviewVisible(true);
+    } catch (e) {}
+  };
+
+  const handleGenerateBill = async (remainsId: string) => {
     Modal.confirm({
-      title: '生成费用清单',
-      content: '确定要根据该遗体的服务项目自动计算并生成费用清单吗？',
+      title: '生成账单',
+      content: '确定要为该遗体生成正式账单吗？生成后可在账单列表中查看和缴费。',
       onOk: async () => {
         try {
-          const res: any = await paymentApi.generate(remainsId);
-          message.success('费用清单已生成');
+          await paymentApi.generateBill(remainsId);
+          message.success('账单已生成');
+          setPreviewVisible(false);
           loadData();
+          setActiveTab('bills');
         } catch (e) {}
       },
     });
@@ -111,12 +147,19 @@ const PaymentList = () => {
     } catch (e) {}
   };
 
-  const columns = [
+  const filteredRemains = remainsToBill.filter((r) =>
+    !searchText ||
+    r.name?.includes(searchText) ||
+    r.familyName?.includes(searchText) ||
+    r.idCardNumber?.includes(searchText)
+  );
+
+  const billColumns = [
     {
       title: '遗体ID',
       dataIndex: 'remainsId',
       key: 'remainsId',
-      width: 200,
+      width: 180,
       ellipsis: true,
     },
     {
@@ -185,14 +228,6 @@ const PaymentList = () => {
           >
             明细
           </Button>
-          <Button
-            type="link"
-            size="small"
-            icon={<CalculatorOutlined />}
-            onClick={() => handleGenerate(record.remainsId)}
-          >
-            重新计算
-          </Button>
           {record.paymentStatus !== 'PAID' && (
             <Button
               type="link"
@@ -204,6 +239,58 @@ const PaymentList = () => {
               缴费
             </Button>
           )}
+        </Space>
+      ),
+    },
+  ];
+
+  const remainsColumns = [
+    {
+      title: '逝者姓名',
+      dataIndex: 'name',
+      key: 'name',
+      width: 100,
+    },
+    {
+      title: '家属姓名',
+      dataIndex: 'familyName',
+      key: 'familyName',
+      width: 100,
+    },
+    {
+      title: '身份证号',
+      dataIndex: 'idCardNumber',
+      key: 'idCardNumber',
+      width: 180,
+    },
+    {
+      title: '当前状态',
+      dataIndex: 'status',
+      key: 'status',
+      width: 100,
+      render: (v: string) => <Tag>{remainsStatusMap[v] || v}</Tag>,
+    },
+    {
+      title: '登记时间',
+      dataIndex: 'createdAt',
+      key: 'createdAt',
+      width: 160,
+      render: (v: string) => dayjs(v).format('YYYY-MM-DD HH:mm'),
+    },
+    {
+      title: '操作',
+      key: 'actions',
+      width: 180,
+      render: (_: any, record: any) => (
+        <Space size="small">
+          <Button
+            type="primary"
+            size="small"
+            icon={<PlusOutlined />}
+            onClick={() => handlePreviewBill(record)}
+          >
+            生成账单
+          </Button>
         </Space>
       ),
     },
@@ -249,46 +336,62 @@ const PaymentList = () => {
         <Col xs={24} sm={12} md={6}>
           <Card size="small">
             <div className="stat-card">
-              <div className="stat-label">逾期账单</div>
-              <div className="stat-value" style={{ color: '#faad14' }}>{overdueList.length}</div>
+              <div className="stat-label">待开单遗体</div>
+              <div className="stat-value" style={{ color: '#1677ff' }}>{remainsToBill.length}</div>
             </div>
           </Card>
         </Col>
       </Row>
 
       {overdueList.length > 0 && (
-        <Card
+        <Alert
+          message={`欠费催缴提醒：有${overdueList.length}条逾期账单`}
+          type="warning"
+          showIcon
           style={{ marginBottom: 16 }}
-          type="inner"
-          title={
-            <Space>
-              <WarningOutlined style={{ color: '#faad14' }} />
-              <span>欠费催缴提醒（{overdueList.length}条）</span>
-            </Space>
-          }
-        >
-          {overdueList.slice(0, 3).map((item: any) => (
-            <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid #f0f0f0' }}>
-              <div>
-                <Tag color="red">逾期{item.overdueDays}天</Tag>
-                <span>欠费金额：<b style={{ color: '#f5222d' }}>¥{item.overdueAmount.toFixed(2)}</b></span>
-              </div>
-              <Button type="link" size="small" onClick={() => handlePay(item.remainsId)}>
-                立即催缴
-              </Button>
-            </div>
-          ))}
-        </Card>
+        />
       )}
 
-      <div className="table-container">
-        <Table
-          loading={loading}
-          columns={columns}
-          dataSource={data}
-          rowKey="id"
-        />
-      </div>
+      <Tabs activeKey={activeTab} onChange={setActiveTab}>
+        <TabPane tab="待开单遗体" key="toBill">
+          <Card size="small" style={{ marginBottom: 16 }}>
+            <Space>
+              <Input
+                placeholder="搜索姓名/身份证号"
+                prefix={<SearchOutlined />}
+                value={searchText}
+                onChange={(e) => setSearchText(e.target.value)}
+                style={{ width: 250 }}
+                allowClear
+              />
+              <Button type="primary" onClick={loadData}>
+                刷新
+              </Button>
+            </Space>
+          </Card>
+          <div className="table-container">
+            <Table
+              loading={loading}
+              columns={remainsColumns}
+              dataSource={filteredRemains}
+              rowKey="id"
+              pagination={{ pageSize: 10 }}
+              emptyDescription="暂无待开单的遗体"
+            />
+          </div>
+        </TabPane>
+
+        <TabPane tab="账单列表" key="bills">
+          <div className="table-container">
+            <Table
+              loading={loading}
+              columns={billColumns}
+              dataSource={data}
+              rowKey="id"
+            />
+          </div>
+        </TabPane>
+      </Tabs>
 
       <Modal
         title="费用明细"
@@ -347,6 +450,83 @@ const PaymentList = () => {
       </Modal>
 
       <Modal
+        title="预览费用 - 生成账单"
+        open={previewVisible}
+        width={700}
+        onCancel={() => setPreviewVisible(false)}
+        footer={[
+          <Button key="cancel" onClick={() => setPreviewVisible(false)}>取消</Button>,
+          <Button key="confirm" type="primary" icon={<PlusOutlined />} onClick={() => previewRemains && handleGenerateBill(previewRemains.id)}>
+            确认生成账单
+          </Button>,
+        ]}
+      >
+        {previewRemains && previewFees && (
+          <>
+            <Alert
+              message="逝者信息"
+              description={
+                <Space>
+                  <span>姓名：{previewRemains.name}</span>
+                  <span>家属：{previewRemains.familyName}</span>
+                  <span>身份证：{previewRemains.idCardNumber}</span>
+                </Space>
+              }
+              type="info"
+              showIcon
+              style={{ marginBottom: 16 }}
+            />
+
+            <Descriptions bordered size="small" column={2} style={{ marginBottom: 16 }}>
+              <Descriptions.Item label="遗体接运">¥{(previewFees.categories?.TRANSPORT || 0).toFixed(2)}</Descriptions.Item>
+              <Descriptions.Item label="冷藏保存">¥{(previewFees.categories?.STORAGE || 0).toFixed(2)}</Descriptions.Item>
+              <Descriptions.Item label="告别仪式">¥{(previewFees.categories?.CEREMONY || 0).toFixed(2)}</Descriptions.Item>
+              <Descriptions.Item label="火化服务">¥{(previewFees.categories?.CREMATION || 0).toFixed(2)}</Descriptions.Item>
+              <Descriptions.Item label="骨灰寄存">¥{(previewFees.categories?.NICHE_STORAGE || 0).toFixed(2)}</Descriptions.Item>
+              <Descriptions.Item label="其他费用">¥{(previewFees.categories?.OTHER || 0).toFixed(2)}</Descriptions.Item>
+              <Descriptions.Item label="费用总计" span={2}>
+                <span style={{ fontSize: 18, fontWeight: 700, color: '#f5222d' }}>
+                  ¥{previewFees.totalAmount?.toFixed(2) || '0.00'}
+                </span>
+              </Descriptions.Item>
+            </Descriptions>
+
+            {previewFees.records && previewFees.records.length > 0 && (
+              <>
+                <Typography.Text strong style={{ marginBottom: 8, display: 'block' }}>费用明细：</Typography.Text>
+                <Table
+                  size="small"
+                  pagination={false}
+                  rowKey="id"
+                  dataSource={previewFees.records}
+                  columns={[
+                    {
+                      title: '类别',
+                      dataIndex: 'category',
+                      key: 'category',
+                      width: 100,
+                      render: (v: string) => feeCategoryMap[v] || v,
+                    },
+                    { title: '项目名称', dataIndex: 'name', key: 'name' },
+                    { title: '单价', dataIndex: 'unitPrice', key: 'unitPrice', width: 80, render: (v: number) => `¥${v.toFixed(2)}` },
+                    { title: '数量', dataIndex: 'quantity', key: 'quantity', width: 60 },
+                    { title: '单位', dataIndex: 'unit', key: 'unit', width: 60 },
+                    {
+                      title: '小计',
+                      dataIndex: 'subtotal',
+                      key: 'subtotal',
+                      width: 100,
+                      render: (v: number) => <b>¥{v.toFixed(2)}</b>,
+                    },
+                  ]}
+                />
+              </>
+            )}
+          </>
+        )}
+      </Modal>
+
+      <Modal
         title="费用缴纳"
         open={payVisible}
         onCancel={() => setPayVisible(false)}
@@ -374,6 +554,9 @@ const PaymentList = () => {
               <Option value="WECHAT">微信支付</Option>
               <Option value="TRANSFER">银行转账</Option>
             </Select>
+          </Form.Item>
+          <Form.Item label="交易流水号（可选）" name="transactionId">
+            <Input placeholder="请输入交易流水号" />
           </Form.Item>
         </Form>
       </Modal>

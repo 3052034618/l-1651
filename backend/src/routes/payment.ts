@@ -1,10 +1,11 @@
 import { Router } from 'express';
-import { body } from 'express-validator';
+import { body, query } from 'express-validator';
 import prisma from '../lib/prisma';
-import { authMiddleware } from '../middleware/auth';
+import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { validateRequest } from '../middleware/validate';
 import { AppError } from '../middleware/errorHandler';
 import { PaymentMethod, PaymentStatus, FeeCategory } from '../types/enums';
+import { notifyRole, NotificationTemplates } from '../utils/notification';
 import dayjs from 'dayjs';
 
 const router = Router();
@@ -35,6 +36,8 @@ export const calculateFees = async (remainsId: string) => {
       quantity: 1,
       unitPrice: transportFee.price,
       subtotal: transportFee.price,
+      category: FeeCategory.TRANSPORT,
+      itemName: transportFee.name,
     });
   }
 
@@ -51,6 +54,8 @@ export const calculateFees = async (remainsId: string) => {
       quantity: storageDays,
       unitPrice: storageFee.price,
       subtotal: storageFee.price * storageDays,
+      category: FeeCategory.STORAGE,
+      itemName: `${storageName}冷藏(共${storageDays}天)`,
     });
   }
 
@@ -61,6 +66,8 @@ export const calculateFees = async (remainsId: string) => {
       quantity: 1,
       unitPrice: disinfectFee.price,
       subtotal: disinfectFee.price,
+      category: FeeCategory.OTHER,
+      itemName: disinfectFee.name,
     });
   }
 
@@ -73,6 +80,8 @@ export const calculateFees = async (remainsId: string) => {
         quantity: 1,
         unitPrice: hallFee.price,
         subtotal: hallFee.price,
+        category: FeeCategory.CEREMONY,
+        itemName: `${remains.ceremony.hall.name}厅使用费`,
       });
     }
     const hostFee = getItem(FeeCategory.CEREMONY, '司仪');
@@ -82,6 +91,8 @@ export const calculateFees = async (remainsId: string) => {
         quantity: 1,
         unitPrice: hostFee.price,
         subtotal: hostFee.price,
+        category: FeeCategory.CEREMONY,
+        itemName: '司仪服务费',
       });
     }
   }
@@ -96,6 +107,8 @@ export const calculateFees = async (remainsId: string) => {
         quantity: 1,
         unitPrice: cremationFee.price,
         subtotal: cremationFee.price,
+        category: FeeCategory.CREMATION,
+        itemName: `${cremationName}炉火化费`,
       });
     }
   }
@@ -110,6 +123,8 @@ export const calculateFees = async (remainsId: string) => {
         quantity: 1,
         unitPrice: nicheFee.price,
         subtotal: nicheFee.price,
+        category: FeeCategory.NICHE_STORAGE,
+        itemName: `${nicheName}格位寄存费`,
       });
     }
   }
@@ -117,17 +132,83 @@ export const calculateFees = async (remainsId: string) => {
   return records;
 };
 
-router.post('/calculate/:remainsId', async (req, res, next) => {
+router.get('/remains-to-bill', [
+  query('status').optional().isString(),
+  query('keyword').optional().isString(),
+  validateRequest,
+], async (req, res, next) => {
   try {
-    const records = await calculateFees(req.params.remainsId);
-    const total = records.reduce((sum, r) => sum + r.subtotal, 0);
-    res.json({ records, total });
+    const where: any = {};
+    if (req.query.status) {
+      where.status = req.query.status as string;
+    }
+    if (req.query.keyword) {
+      where.OR = [
+        { name: { contains: req.query.keyword as string } },
+        { idCardNumber: { contains: req.query.keyword as string } },
+        { familyName: { contains: req.query.keyword as string } },
+      ];
+    }
+
+    const remainsList = await prisma.remains.findMany({
+      where,
+      include: {
+        cabinet: true,
+        ceremony: { include: { hall: true } },
+        cremation: { include: { furnace: true } },
+        ashes: { include: { niche: true } },
+        payment: true,
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 50,
+    });
+
+    const result = remainsList.map((r: any) => ({
+      id: r.id,
+      name: r.name,
+      idCardNumber: r.idCardNumber,
+      familyName: r.familyName,
+      familyPhone: r.familyPhone,
+      status: r.status,
+      storageRequirement: r.storageRequirement,
+      hasCeremony: !!r.ceremony,
+      hasCremation: !!r.cremation,
+      hasAshes: !!r.ashes,
+      hasPayment: !!r.payment,
+      paymentStatus: r.payment?.paymentStatus || null,
+      createdAt: r.createdAt,
+    }));
+
+    res.json(result);
   } catch (error) {
     next(error);
   }
 });
 
-router.post('/generate/:remainsId', async (req: any, res, next) => {
+router.post('/calculate/:remainsId', async (req, res, next) => {
+  try {
+    const records = await calculateFees(req.params.remainsId);
+    const total = records.reduce((sum, r) => sum + r.subtotal, 0);
+    const remains = await prisma.remains.findUnique({
+      where: { id: req.params.remainsId },
+      select: { name: true, familyName: true },
+    });
+    res.json({
+      remains,
+      records,
+      total,
+      categorySummary: records.reduce((acc: any, r: any) => {
+        if (!acc[r.category]) acc[r.category] = 0;
+        acc[r.category] += r.subtotal;
+        return acc;
+      }, {}),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/generate-bill/:remainsId', async (req: AuthRequest, res, next) => {
   try {
     const remainsId = req.params.remainsId;
     const remains = await prisma.remains.findUnique({ where: { id: remainsId } });
@@ -142,7 +223,13 @@ router.post('/generate/:remainsId', async (req: any, res, next) => {
       const createdRecords = await Promise.all(
         records.map((r) =>
           tx.feeRecord.create({
-            data: { ...r, remainsId },
+            data: {
+              feeItemId: r.feeItemId,
+              quantity: r.quantity,
+              unitPrice: r.unitPrice,
+              subtotal: r.subtotal,
+              remainsId,
+            },
             include: { feeItem: true },
           })
         )
@@ -150,34 +237,58 @@ router.post('/generate/:remainsId', async (req: any, res, next) => {
 
       const payment = await tx.payment.upsert({
         where: { remainsId },
-        update: { totalAmount: total },
-        create: { remainsId, totalAmount: total },
-        include: { records: { include: { feeItem: true } } },
+        update: {
+          totalAmount: total,
+          records: { connect: createdRecords.map((r) => ({ id: r.id })) },
+        },
+        create: {
+          remainsId,
+          totalAmount: total,
+          records: { connect: createdRecords.map((r) => ({ id: r.id })) },
+        },
+        include: {
+          records: { include: { feeItem: true } },
+        },
       });
 
       return { payment, records: createdRecords };
     });
 
-    res.json(result);
+    res.json({
+      message: '账单生成成功',
+      ...result,
+      total,
+    });
   } catch (error) {
     next(error);
   }
 });
 
 router.get('/payments', [
-  body('status').optional(),
+  query('status').optional(),
+  query('keyword').optional().isString(),
   validateRequest,
 ], async (req, res, next) => {
   try {
     const where: any = {};
     if (req.query.status) where.paymentStatus = req.query.status;
+    if (req.query.keyword) {
+      where.remains = {
+        OR: [
+          { name: { contains: req.query.keyword as string } },
+          { familyName: { contains: req.query.keyword as string } },
+        ],
+      };
+    }
 
     const payments = await prisma.payment.findMany({
       where,
       include: {
         records: { include: { feeItem: true } },
+        remains: { select: { name: true, familyName: true, familyPhone: true, status: true } },
       },
       orderBy: { createdAt: 'desc' },
+      take: 100,
     });
     res.json(payments);
   } catch (error) {
@@ -191,6 +302,7 @@ router.get('/payments/:remainsId', async (req, res, next) => {
       where: { remainsId: req.params.remainsId },
       include: {
         records: { include: { feeItem: true } },
+        remains: { select: { name: true, familyName: true } },
       },
     });
     if (!payment) throw new AppError('支付记录不存在', 404);
@@ -203,11 +315,17 @@ router.get('/payments/:remainsId', async (req, res, next) => {
 router.post('/pay/:remainsId', [
   body('amount').isFloat({ min: 0.01 }).withMessage('支付金额必须大于0'),
   body('paymentMethod').isIn(['CASH', 'CARD', 'ALIPAY', 'WECHAT', 'TRANSFER']).withMessage('支付方式无效'),
+  body('transactionId').optional().isString(),
   validateRequest,
 ], async (req, res, next) => {
   try {
-    const { amount, paymentMethod } = req.body;
-    const payment = await prisma.payment.findUnique({ where: { remainsId: req.params.remainsId } });
+    const { amount, paymentMethod, transactionId } = req.body;
+    const remainsId = req.params.remainsId;
+
+    const payment = await prisma.payment.findUnique({
+      where: { remainsId },
+      include: { remains: true },
+    });
     if (!payment) throw new AppError('支付记录不存在', 404);
 
     const paidAmount = payment.paidAmount + amount;
@@ -220,17 +338,35 @@ router.post('/pay/:remainsId', [
     }
 
     const updated = await prisma.payment.update({
-      where: { remainsId: req.params.remainsId },
+      where: { remainsId },
       data: {
         paidAmount,
         paymentStatus: status,
         paymentMethod,
+        transactionId: transactionId || payment.transactionId,
         paidAt: status === PaymentStatus.PAID ? new Date() : payment.paidAt,
       },
-      include: { records: { include: { feeItem: true } } },
+      include: {
+        records: { include: { feeItem: true } },
+        remains: { select: { name: true, familyName: true } },
+      },
     });
 
-    res.json(updated);
+    if (status === PaymentStatus.PAID) {
+      const template = NotificationTemplates.paymentReminder(payment.remains.name, payment.totalAmount);
+      template.title = '费用已结清';
+      template.content = `【${payment.remains.name}】费用已全部结清，合计¥${payment.totalAmount.toFixed(2)}`;
+      await notifyRole('ADMIN', {
+        ...template,
+        targetId: payment.id,
+      });
+    }
+
+    res.json({
+      message: '支付成功',
+      payment: updated,
+      remaining: Math.max(0, updated.totalAmount - updated.paidAmount),
+    });
   } catch (error) {
     next(error);
   }
@@ -248,6 +384,7 @@ router.get('/overdue/payments', async (req, res, next) => {
       },
       include: {
         records: { include: { feeItem: true } },
+        remains: { select: { name: true, familyName: true, familyPhone: true } },
       },
       orderBy: { createdAt: 'asc' },
     });

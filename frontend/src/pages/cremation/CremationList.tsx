@@ -34,9 +34,9 @@ const statusColorMap: Record<string, string> = {
 };
 
 const furnaceTypeMap: Record<string, string> = {
-  TYPE_A: 'A型炉',
-  TYPE_B: 'B型炉',
-  TYPE_C: 'C型炉（豪华）',
+  TYPE_A: 'A型环保炉',
+  TYPE_B: 'B型标准炉',
+  TYPE_C: 'C型普通炉',
 };
 
 const furnaceStatusMap: Record<string, { color: string; text: string }> = {
@@ -53,6 +53,9 @@ const CremationList = () => {
   const [completeVisible, setCompleteVisible] = useState(false);
   const [completeId, setCompleteId] = useState<string>('');
   const [completeForm] = Form.useForm();
+  const [refuelVisible, setRefuelVisible] = useState(false);
+  const [refuelId, setRefuelId] = useState<string>('');
+  const [refuelForm] = Form.useForm();
 
   const loadData = async () => {
     setLoading(true);
@@ -106,6 +109,22 @@ const CremationList = () => {
       message.success('火化已完成登记');
       setCompleteVisible(false);
       completeForm.resetFields();
+      loadData();
+    } catch (e) {}
+  };
+
+  const handleRefuel = (id: string) => {
+    setRefuelId(id);
+    setRefuelVisible(true);
+  };
+
+  const handleRefuelSubmit = async () => {
+    try {
+      const values = await refuelForm.validateFields();
+      await cremationApi.refuelFurnace(refuelId, values.amount);
+      message.success('燃料补充成功');
+      setRefuelVisible(false);
+      refuelForm.resetFields();
       loadData();
     } catch (e) {}
   };
@@ -182,6 +201,13 @@ const CremationList = () => {
       ),
     },
     {
+      title: '排序原因',
+      dataIndex: 'sortReason',
+      key: 'sortReason',
+      width: 250,
+      render: (v: string) => v || '-',
+    },
+    {
       title: '操作',
       key: 'actions',
       width: 160,
@@ -222,13 +248,13 @@ const CremationList = () => {
       </div>
 
       <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
-        {furnaces.map((f) => (
+        {furnaces.map((f: any) => (
           <Col xs={24} sm={12} md={6} key={f.id}>
             <Card size="small">
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div>
                   <div style={{ fontWeight: 600 }}>{f.furnaceNo}</div>
-                  <div style={{ color: '#999', fontSize: 12 }}>{furnaceTypeMap[f.type]}</div>
+                  <div style={{ color: '#999', fontSize: 12 }}>{f.typeName}</div>
                 </div>
                 <Tag color={furnaceStatusMap[f.status]?.color}>
                   {furnaceStatusMap[f.status]?.text}
@@ -236,11 +262,36 @@ const CremationList = () => {
               </div>
               <div style={{ marginTop: 8 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#666' }}>
-                  <span><DashboardOutlined /> 燃料</span>
-                  <span>{f.fuelLevel}%</span>
+                  <span>环保评级</span>
+                  <Tag color={f.ecoRating >= 80 ? 'green' : f.ecoRating >= 60 ? 'orange' : 'red'} size="small">
+                    {f.ecoRating}分
+                  </Tag>
                 </div>
-                <Progress percent={f.fuelLevel} size="small" showInfo={false} />
               </div>
+              <div style={{ marginTop: 8 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#666' }}>
+                  <span><DashboardOutlined /> 燃料</span>
+                  <span style={{ color: f.fuelWarning ? '#ff4d4f' : undefined }}>{f.fuelLevel}%</span>
+                </div>
+                <Progress
+                  percent={f.fuelLevel}
+                  size="small"
+                  showInfo={false}
+                  strokeColor={f.fuelWarning ? '#ff4d4f' : undefined}
+                />
+              </div>
+              {f.fuelWarning && f.status === 'AVAILABLE' && (
+                <Button
+                  size="small"
+                  type="primary"
+                  ghost
+                  block
+                  style={{ marginTop: 8 }}
+                  onClick={() => handleRefuel(f.id)}
+                >
+                  补充燃料
+                </Button>
+              )}
             </Card>
           </Col>
         ))}
@@ -277,6 +328,25 @@ const CremationList = () => {
             rules={[{ required: true, message: '请输入排放检测值' }]}
           >
             <InputNumber min={0} max={100} style={{ width: '100%' }} placeholder="请输入排放检测值" />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title="补充燃料"
+        open={refuelVisible}
+        onCancel={() => setRefuelVisible(false)}
+        onOk={handleRefuelSubmit}
+        okText="确认补充"
+        cancelText="取消"
+      >
+        <Form form={refuelForm} layout="vertical">
+          <Form.Item
+            label="补充燃料量 (%)"
+            name="amount"
+            rules={[{ required: true, message: '请输入补充量' }]}
+          >
+            <InputNumber min={0} max={100} style={{ width: '100%' }} placeholder="请输入补充量" />
           </Form.Item>
         </Form>
       </Modal>

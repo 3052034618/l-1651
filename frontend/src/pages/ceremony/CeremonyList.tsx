@@ -157,6 +157,20 @@ const CeremonyList = () => {
       width: 100,
     },
     {
+      title: '预计人数',
+      dataIndex: ['remains', 'expectedAttendees'],
+      key: 'expectedAttendees',
+      width: 90,
+      render: (v: number) => v ? `${v}人` : '-',
+    },
+    {
+      title: '分配原因',
+      dataIndex: 'allocationReason',
+      key: 'allocationReason',
+      width: 220,
+      render: (v: string) => v || '-',
+    },
+    {
       title: '状态',
       dataIndex: 'status',
       key: 'status',
@@ -170,7 +184,7 @@ const CeremonyList = () => {
     {
       title: '操作',
       key: 'actions',
-      width: 240,
+      width: 260,
       render: (_: any, record: Ceremony) => (
         <Space size="small">
           {record.status === 'PENDING' && (

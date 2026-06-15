@@ -52,12 +52,14 @@ export const ashesApi = {
 
 export const paymentApi = {
   calculate: (remainsId: string) =>
-    api.get(`/payment/calculate/${remainsId}`),
-  generate: (remainsId: string) =>
-    api.post(`/payment/generate/${remainsId}`),
+    api.post(`/payment/calculate/${remainsId}`),
+  generateBill: (remainsId: string) =>
+    api.post(`/payment/generate-bill/${remainsId}`),
+  getRemainsToBill: (params?: any) =>
+    api.get('/payment/remains-to-bill', { params }),
   getPayments: (params?: any) => api.get('/payment/payments', { params }),
   getPayment: (remainsId: string) => api.get(`/payment/payments/${remainsId}`),
-  pay: (remainsId: string, data: { amount: number; paymentMethod: string }) =>
+  pay: (remainsId: string, data: { amount: number; paymentMethod: string; transactionId?: string }) =>
     api.post(`/payment/pay/${remainsId}`, data),
   getOverduePayments: () => api.get('/payment/overdue/payments'),
   getFeeItems: () => api.get('/payment/fee-items'),
