@@ -13,12 +13,18 @@ import {
   Progress,
   Row,
   Col,
+  Alert,
+  Descriptions,
+  Tooltip,
 } from 'antd';
 import {
   FireOutlined,
   PlayCircleOutlined,
   CheckCircleOutlined,
   DashboardOutlined,
+  InfoCircleOutlined,
+  ThunderboltOutlined,
+  StopOutlined,
 } from '@ant-design/icons';
 import { cremationApi } from '../../api/endpoints';
 import { Cremation, CREMATION_STATUS_MAP, CremationFurnace } from '../../types';
@@ -46,10 +52,14 @@ const furnaceStatusMap: Record<string, { color: string; text: string }> = {
   COOLING_DOWN: { color: 'orange', text: '冷却中' },
 };
 
+const MIN_FUEL = 20;
+const MIN_ECO = 60;
+
 const CremationList = () => {
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<Cremation[]>([]);
   const [furnaces, setFurnaces] = useState<CremationFurnace[]>([]);
+  const [excludedFurnaces, setExcludedFurnaces] = useState<any[]>([]);
   const [completeVisible, setCompleteVisible] = useState(false);
   const [completeId, setCompleteId] = useState<string>('');
   const [completeForm] = Form.useForm();
@@ -78,13 +88,28 @@ const CremationList = () => {
   const handleGenerate = async () => {
     Modal.confirm({
       title: '生成火化顺序',
-      content: '确定要根据遗体状态、火化炉工况和环保要求自动生成火化顺序吗？',
+      content: (
+        <div>
+          <p>确定要根据以下约束自动生成火化顺序吗？</p>
+          <ul style={{ margin: 0, paddingLeft: 20, color: '#666' }}>
+            <li><ThunderboltOutlined /> 燃料≥{MIN_FUEL}%（不足的炉排除）</li>
+            <li><InfoCircleOutlined /> 环保评级≥{MIN_ECO}分（不达标炉排除）</li>
+            <li><FireOutlined /> 优先选择环保等级≥80分的炉</li>
+            <li><DashboardOutlined /> 负载均衡分配</li>
+          </ul>
+        </div>
+      ),
       onOk: async () => {
         try {
           const res: any = await cremationApi.generateSequence();
           message.success(`已生成 ${res.count} 条火化任务`);
+          if (res.excludedFurnaces && res.excludedFurnaces.length > 0) {
+            setExcludedFurnaces(res.excludedFurnaces);
+          }
           loadData();
-        } catch (e) {}
+        } catch (e: any) {
+          message.error(e.response?.data?.message || '生成失败');
+        }
       },
     });
   };
@@ -204,8 +229,12 @@ const CremationList = () => {
       title: '排序原因',
       dataIndex: 'sortReason',
       key: 'sortReason',
-      width: 250,
-      render: (v: string) => v || '-',
+      width: 300,
+      render: (v: string) => v ? (
+        <Tooltip title={v}>
+          <span style={{ fontSize: 12, color: '#555' }}>{v}</span>
+        </Tooltip>
+      ) : '-',
     },
     {
       title: '操作',
@@ -247,6 +276,21 @@ const CremationList = () => {
         </Button>
       </div>
 
+      <Alert
+        type="info"
+        showIcon
+        style={{ marginBottom: 16 }}
+        message="火化排序算法约束"
+        description={
+          <Space size={16} wrap>
+            <Tag color="blue"><ThunderboltOutlined /> 燃料≥{MIN_FUEL}%</Tag>
+            <Tag color="green"><InfoCircleOutlined /> 环保评级≥{MIN_ECO}分</Tag>
+            <Tag color="purple"><FireOutlined /> 优先选择环保≥80分</Tag>
+            <Tag color="orange"><DashboardOutlined /> 负载均衡分配</Tag>
+          </Space>
+        }
+      />
+
       <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
         {furnaces.map((f: any) => (
           <Col xs={24} sm={12} md={6} key={f.id}>
@@ -263,9 +307,12 @@ const CremationList = () => {
               <div style={{ marginTop: 8 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#666' }}>
                   <span>环保评级</span>
-                  <Tag color={f.ecoRating >= 80 ? 'green' : f.ecoRating >= 60 ? 'orange' : 'red'} size="small">
-                    {f.ecoRating}分
-                  </Tag>
+                  <span>
+                    <Tag color={f.ecoRating >= 80 ? 'green' : f.ecoRating >= 60 ? 'orange' : 'red'} size="small">
+                      {f.ecoRating}分
+                    </Tag>
+                    {f.ecoRating < 60 && <StopOutlined style={{ color: '#ff4d4f', marginLeft: 4 }} />}
+                  </span>
                 </div>
               </div>
               <div style={{ marginTop: 8 }}>
@@ -279,6 +326,7 @@ const CremationList = () => {
                   showInfo={false}
                   strokeColor={f.fuelWarning ? '#ff4d4f' : undefined}
                 />
+                {f.fuelWarning && <span style={{ color: '#ff4d4f', fontSize: 12 }}><ThunderboltOutlined /> 燃料不足</span>}
               </div>
               {f.fuelWarning && f.status === 'AVAILABLE' && (
                 <Button
@@ -296,6 +344,28 @@ const CremationList = () => {
           </Col>
         ))}
       </Row>
+
+      {excludedFurnaces.length > 0 && (
+        <Card
+          title={<span><StopOutlined style={{ color: '#ff4d4f', marginRight: 8 }} />本次排序排除的火化炉（共{excludedFurnaces.length}台）</span>}
+          size="small"
+          style={{ marginBottom: 16 }}
+          type="inner"
+        >
+          <Row gutter={[8, 8]}>
+            {excludedFurnaces.map((f: any) => (
+              <Col xs={24} sm={12} md={8} key={f.id}>
+                <Descriptions column={1} size="small" bordered>
+                  <Descriptions.Item label="炉号">{f.furnaceNo}</Descriptions.Item>
+                  <Descriptions.Item label="排除原因">
+                    <Tag color="red">{f.reason}</Tag>
+                  </Descriptions.Item>
+                </Descriptions>
+              </Col>
+            ))}
+          </Row>
+        </Card>
+      )}
 
       <div className="table-container">
         <Table

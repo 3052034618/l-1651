@@ -13,6 +13,7 @@ import {
   message,
   Alert,
   Steps,
+  InputNumber,
 } from 'antd';
 import { ArrowLeftOutlined, CheckCircleOutlined, ExclamationCircleOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
@@ -279,7 +280,28 @@ const RemainsCreate = () => {
                 </Select>
               </Form.Item>
             </Col>
-            <Col xs={24} md={16}>
+            <Col xs={24} md={8}>
+              <Form.Item
+                label="预计参加人数"
+                name="expectedAttendees"
+                initialValue={50}
+                rules={[{ required: true, message: '请输入预计参加人数' }]}
+              >
+                <InputNumber min={1} max={500} style={{ width: '100%' }} placeholder="请输入预计参加人数" />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={8}>
+              <Form.Item label="告别偏好" name="ceremonyPreference">
+                <Select placeholder="请选择告别偏好（可选）" allowClear>
+                  <Option value="SIMPLE">简约仪式</Option>
+                  <Option value="TRADITIONAL">传统仪式</Option>
+                  <Option value="BUDDHIST">佛教仪式</Option>
+                  <Option value="CHRISTIAN">基督教仪式</Option>
+                  <Option value="CUSTOM">个性化定制</Option>
+                </Select>
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={24}>
               <Form.Item label="预计告别时间" name="expectedCeremonyTime">
                 <DatePicker
                   showTime

@@ -14,6 +14,12 @@ import {
   Tabs,
   List,
   Avatar,
+  Row,
+  Col,
+  Card,
+  Progress,
+  Descriptions,
+  Divider,
 } from 'antd';
 import {
   CalendarOutlined,
@@ -22,6 +28,8 @@ import {
   CheckOutlined,
   CloseOutlined,
   UserOutlined,
+  TeamOutlined,
+  ThunderboltOutlined,
 } from '@ant-design/icons';
 import { scheduleApi } from '../../api/endpoints';
 import { Schedule, SHIFT_TYPE_MAP, ShiftType } from '../../types';
@@ -45,9 +53,21 @@ const requestStatusMap: Record<string, { text: string; color: string }> = {
   REJECTED: { text: '已拒绝', color: 'red' },
 };
 
+const roleMap: Record<string, string> = {
+  HOST: '司仪',
+  CREMATOR: '火化员',
+  RECEPTION: '接待员',
+  STAFF: '通用员工',
+  ADMIN: '管理员',
+  SUPERVISOR: '主管',
+};
+
 const ScheduleList = () => {
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<Schedule[]>([]);
+  const [userStats, setUserStats] = useState<Record<string, any>>({});
+  const [dailyCoverage, setDailyCoverage] = useState<Record<string, any>>({});
+  const [skillsMap, setSkillsMap] = useState<Record<string, string>>({});
   const [requests, setRequests] = useState<any[]>([]);
   const [dateRange, setDateRange] = useState<any>([dayjs().startOf('week'), dayjs().endOf('week')]);
   const [generateVisible, setGenerateVisible] = useState(false);
@@ -62,7 +82,14 @@ const ScheduleList = () => {
         startDate: dateRange?.[0]?.format('YYYY-MM-DD'),
         endDate: dateRange?.[1]?.format('YYYY-MM-DD'),
       });
-      setData(res as Schedule[]);
+      if (res.schedules) {
+        setData(res.schedules as Schedule[]);
+        setUserStats(res.userStats || {});
+        setDailyCoverage(res.dailyCoverage || {});
+        setSkillsMap(res.skillsMap || {});
+      } else {
+        setData(res as Schedule[]);
+      }
     } finally {
       setLoading(false);
     }
@@ -107,6 +134,7 @@ const ScheduleList = () => {
           await scheduleApi.rejectShiftRequest(id, '不符合排班要求');
           message.success('已拒绝申请');
           loadRequests();
+          loadSchedule();
         } catch (e) {}
       },
     });
@@ -115,12 +143,12 @@ const ScheduleList = () => {
   const handleSubmitRequest = async () => {
     try {
       const values = await requestForm.validateFields();
-      const data = {
+      const reqData = {
         ...values,
         originalDate: values.originalDate?.format('YYYY-MM-DD'),
         requestedDate: values.requestedDate?.format('YYYY-MM-DD'),
       };
-      await scheduleApi.createShiftRequest(data);
+      await scheduleApi.createShiftRequest(reqData);
       message.success('调班申请已提交');
       setRequestVisible(false);
       requestForm.resetFields();
@@ -137,13 +165,46 @@ const ScheduleList = () => {
 
   const dates = Object.keys(groupedByDate).sort();
 
+  const uniqueUsers = Array.from(
+    new Map(data.map((item) => [item.userId, item])).values()
+  ).map((item) => ({
+    userId: item.userId,
+    user: item.user,
+  }));
+
   const scheduleColumns = [
     {
       title: '员工',
-      dataIndex: ['user', 'realName'],
       key: 'user',
-      width: 100,
+      width: 240,
       fixed: 'left' as const,
+      render: (_: any, record: any) => {
+        const stats = userStats[record.userId] || {};
+        const userRole = (record.user as any)?.role || stats.role;
+        const userSkills = stats.skills || (record.user as any)?.skills || '';
+        const skillNames = userSkills
+          ? userSkills.split(',').map((s: string) => skillsMap[s] || s).join('、')
+          : (roleMap[userRole] || '');
+        const percent = stats.maxHours ? Math.min(100, (stats.hours / stats.maxHours) * 100) : 0;
+        const isOver = stats.hours > 0 && stats.hours >= (stats.maxHours || 0);
+        return (
+          <div style={{ padding: 4 }}>
+            <div style={{ fontWeight: 600, marginBottom: 4 }}>
+              {(record.user as any)?.realName || stats.name}
+              <Tag style={{ marginLeft: 8 }} color="blue">{skillNames}</Tag>
+            </div>
+            <div style={{ fontSize: 12, color: '#666', marginBottom: 4 }}>
+              已排: {stats.hours || 0}h / 上限: {stats.maxHours || 56}h ({stats.shifts || 0}班)
+            </div>
+            <Progress
+              percent={Number(percent.toFixed(0))}
+              size="small"
+              showInfo={false}
+              strokeColor={isOver ? '#ff4d4f' : percent > 80 ? '#faad14' : '#52c41a'}
+            />
+          </div>
+        );
+      },
     },
     ...dates.map((date) => ({
       title: (
@@ -156,7 +217,7 @@ const ScheduleList = () => {
       ),
       dataIndex: date,
       key: date,
-      width: 120,
+      width: 130,
       align: 'center' as const,
       render: (_: any, record: Schedule) => {
         const daySchedule = groupedByDate[date]?.find((s) => s.userId === record.userId);
@@ -169,13 +230,6 @@ const ScheduleList = () => {
       },
     })),
   ];
-
-  const uniqueUsers = Array.from(
-    new Map(data.map((item) => [item.userId, item])).values()
-  ).map((item) => ({
-    userId: item.userId,
-    user: item.user,
-  }));
 
   return (
     <div>
@@ -197,6 +251,85 @@ const ScheduleList = () => {
             <RangePicker value={dateRange} onChange={setDateRange} />
             <Button type="primary" onClick={loadSchedule}>查询</Button>
           </Space>
+
+          {Object.keys(dailyCoverage).length > 0 && (
+            <Card title="每日岗位覆盖情况" size="small" style={{ marginBottom: 16 }}>
+              <Row gutter={[8, 8]}>
+                {dates.map((date) => {
+                  const coverage = dailyCoverage[date] || {};
+                  return (
+                    <Col xs={24} sm={12} md={8} lg={6} key={date}>
+                      <Card size="small" type="inner" title={dayjs(date).format('MM-DD ddd')}>
+                        <Descriptions column={1} size="small" bordered>
+                          {['MORNING', 'AFTERNOON', 'NIGHT'].map((shift) => {
+                            const shiftData = coverage[shift] || {};
+                            const shiftLabel = SHIFT_TYPE_MAP[shift as ShiftType];
+                            return (
+                              <Descriptions.Item key={shift} label={shiftLabel}>
+                                <Space size={4} wrap>
+                                  <Tag color={shiftData.hasHost ? 'green' : 'red'}>
+                                    {shiftData.hasHost ? '✓ 司仪' : '✗ 司仪'}
+                                  </Tag>
+                                  <Tag color={shiftData.hasCremator ? 'green' : 'red'}>
+                                    {shiftData.hasCremator ? '✓ 火化员' : '✗ 火化员'}
+                                  </Tag>
+                                  <Tag color={shiftData.hasReception ? 'green' : 'red'}>
+                                    {shiftData.hasReception ? '✓ 接待' : '✗ 接待'}
+                                  </Tag>
+                                </Space>
+                              </Descriptions.Item>
+                            );
+                          })}
+                        </Descriptions>
+                      </Card>
+                    </Col>
+                  );
+                })}
+              </Row>
+            </Card>
+          )}
+
+          {Object.keys(userStats).length > 0 && (
+            <Card title="员工工时统计" size="small" style={{ marginBottom: 16 }}>
+              <Row gutter={[8, 8]}>
+                {Object.entries(userStats).map(([userId, stats]: [string, any]) => {
+                  const percent = stats.maxHours ? Math.min(100, (stats.hours / stats.maxHours) * 100) : 0;
+                  const isOver = stats.hours > 0 && stats.hours >= (stats.maxHours || 0);
+                  const skillDisplay = stats.skills
+                    ? stats.skills.split(',').map((s: string) => skillsMap[s] || s).join('、')
+                    : (roleMap[stats.role] || '');
+                  return (
+                    <Col xs={24} sm={12} md={8} lg={6} key={userId}>
+                      <Card size="small" type="inner">
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                          <span style={{ fontWeight: 600 }}>
+                            <UserOutlined style={{ marginRight: 4 }} />
+                            {stats.name}
+                          </span>
+                          <Tag color="blue">{skillDisplay}</Tag>
+                        </div>
+                        <div style={{ fontSize: 12, color: '#666', marginBottom: 4 }}>
+                          已排 <b>{stats.hours || 0}h</b> / 上限 {stats.maxHours || 56}h ({stats.shifts || 0}班)
+                        </div>
+                        <Progress
+                          percent={Number(percent.toFixed(0))}
+                          size="small"
+                          strokeColor={isOver ? '#ff4d4f' : percent > 80 ? '#faad14' : '#52c41a'}
+                        />
+                        {isOver && (
+                          <div style={{ color: '#ff4d4f', fontSize: 12, marginTop: 4 }}>
+                            <ThunderboltOutlined /> 已达工时上限
+                          </div>
+                        )}
+                      </Card>
+                    </Col>
+                  );
+                })}
+              </Row>
+            </Card>
+          )}
+
+          <Divider style={{ margin: '8px 0 16px 0' }} />
 
           <div className="table-container">
             <Table
@@ -289,8 +422,15 @@ const ScheduleList = () => {
         cancelText="取消"
       >
         <div style={{ marginBottom: 16 }}>
-          <Text type="secondary">选择要生成排班的周起始日期（周一），系统将根据员工技能和工时上限自动生成排班。</Text>
+          <Text type="secondary">
+            选择要生成排班的周起始日期（周一），系统将根据：
+          </Text>
         </div>
+        <ul style={{ margin: '0 0 16px 0', paddingLeft: 20, color: '#666' }}>
+          <li><TeamOutlined /> 员工岗位技能（司仪/火化员/接待员）</li>
+          <li><ThunderboltOutlined /> 每人每日和每周工时上限</li>
+          <li><CalendarOutlined /> 确保每日每个班次三个核心岗位都有人覆盖</li>
+        </ul>
         <DatePicker value={generateDate} onChange={setGenerateDate} style={{ width: '100%' }} picker="week" />
       </Modal>
 

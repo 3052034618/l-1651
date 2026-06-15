@@ -250,6 +250,12 @@ const RemainsList = () => {
             <Descriptions.Item label="冷藏柜位">
               {detail.cabinet?.cabinetNo || '-'}
             </Descriptions.Item>
+            <Descriptions.Item label="预计参加人数">
+              {(detail as any).expectedAttendees ? `${(detail as any).expectedAttendees}人` : '-'}
+            </Descriptions.Item>
+            <Descriptions.Item label="告别偏好">
+              {(detail as any).ceremonyPreference || '-'}
+            </Descriptions.Item>
             <Descriptions.Item label="预计告别时间">
               {detail.expectedCeremonyTime ? dayjs(detail.expectedCeremonyTime).format('YYYY-MM-DD HH:mm') : '-'}
             </Descriptions.Item>

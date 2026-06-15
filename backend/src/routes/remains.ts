@@ -94,6 +94,8 @@ router.post(
             familyRelation: req.body.familyRelation,
             storageRequirement: req.body.storageRequirement,
             expectedCeremonyTime: req.body.expectedCeremonyTime ? new Date(req.body.expectedCeremonyTime) : null,
+            expectedAttendees: req.body.expectedAttendees || 50,
+            ceremonyPreference: req.body.ceremonyPreference || null,
             cabinetId: allocation.cabinet.id,
             status: RemainsStatus.IN_STORAGE,
             createdBy: req.user!.id,

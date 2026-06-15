@@ -478,15 +478,15 @@ const PaymentList = () => {
             />
 
             <Descriptions bordered size="small" column={2} style={{ marginBottom: 16 }}>
-              <Descriptions.Item label="遗体接运">¥{(previewFees.categories?.TRANSPORT || 0).toFixed(2)}</Descriptions.Item>
-              <Descriptions.Item label="冷藏保存">¥{(previewFees.categories?.STORAGE || 0).toFixed(2)}</Descriptions.Item>
-              <Descriptions.Item label="告别仪式">¥{(previewFees.categories?.CEREMONY || 0).toFixed(2)}</Descriptions.Item>
-              <Descriptions.Item label="火化服务">¥{(previewFees.categories?.CREMATION || 0).toFixed(2)}</Descriptions.Item>
-              <Descriptions.Item label="骨灰寄存">¥{(previewFees.categories?.NICHE_STORAGE || 0).toFixed(2)}</Descriptions.Item>
-              <Descriptions.Item label="其他费用">¥{(previewFees.categories?.OTHER || 0).toFixed(2)}</Descriptions.Item>
+              <Descriptions.Item label="遗体接运">¥{(previewFees.categorySummary?.TRANSPORT || 0).toFixed(2)}</Descriptions.Item>
+              <Descriptions.Item label="冷藏保存">¥{(previewFees.categorySummary?.STORAGE || 0).toFixed(2)}</Descriptions.Item>
+              <Descriptions.Item label="告别仪式">¥{(previewFees.categorySummary?.CEREMONY || 0).toFixed(2)}</Descriptions.Item>
+              <Descriptions.Item label="火化服务">¥{(previewFees.categorySummary?.CREMATION || 0).toFixed(2)}</Descriptions.Item>
+              <Descriptions.Item label="骨灰寄存">¥{(previewFees.categorySummary?.NICHE_STORAGE || 0).toFixed(2)}</Descriptions.Item>
+              <Descriptions.Item label="其他费用">¥{(previewFees.categorySummary?.OTHER || 0).toFixed(2)}</Descriptions.Item>
               <Descriptions.Item label="费用总计" span={2}>
                 <span style={{ fontSize: 18, fontWeight: 700, color: '#f5222d' }}>
-                  ¥{previewFees.totalAmount?.toFixed(2) || '0.00'}
+                  ¥{previewFees.total?.toFixed(2) || '0.00'}
                 </span>
               </Descriptions.Item>
             </Descriptions>
@@ -497,7 +497,7 @@ const PaymentList = () => {
                 <Table
                   size="small"
                   pagination={false}
-                  rowKey="id"
+                  rowKey={(r: any) => r.feeItemId || r.id || r.itemName}
                   dataSource={previewFees.records}
                   columns={[
                     {
@@ -507,16 +507,16 @@ const PaymentList = () => {
                       width: 100,
                       render: (v: string) => feeCategoryMap[v] || v,
                     },
-                    { title: '项目名称', dataIndex: 'name', key: 'name' },
-                    { title: '单价', dataIndex: 'unitPrice', key: 'unitPrice', width: 80, render: (v: number) => `¥${v.toFixed(2)}` },
+                    { title: '项目名称', dataIndex: 'itemName', key: 'name', render: (v: string, r: any) => v || r.feeItem?.name || '-' },
+                    { title: '单价', dataIndex: 'unitPrice', key: 'unitPrice', width: 80, render: (v: number) => `¥${v?.toFixed(2) || '0.00'}` },
                     { title: '数量', dataIndex: 'quantity', key: 'quantity', width: 60 },
-                    { title: '单位', dataIndex: 'unit', key: 'unit', width: 60 },
+                    { title: '单位', dataIndex: 'unit', key: 'unit', width: 60, render: (v: string, r: any) => v || r.feeItem?.unit || '次' },
                     {
                       title: '小计',
                       dataIndex: 'subtotal',
                       key: 'subtotal',
                       width: 100,
-                      render: (v: number) => <b>¥{v.toFixed(2)}</b>,
+                      render: (v: number) => <b>¥{v?.toFixed(2) || '0.00'}</b>,
                     },
                   ]}
                 />

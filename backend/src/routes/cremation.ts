@@ -49,12 +49,24 @@ export const generateCremationSequence = async () => {
     ],
   });
 
-  const availableFurnaces = allFurnaces.filter(
-    (f) => f.status === FurnaceStatus.AVAILABLE && f.fuelLevel >= MIN_FUEL_THRESHOLD
-  );
+  const availableFurnaces = allFurnaces.filter((f) => {
+    if (f.status !== FurnaceStatus.AVAILABLE) return false;
+    if (f.fuelLevel < MIN_FUEL_THRESHOLD) return false;
+    const ecoRating = FURNACE_ECO_RATING[f.type] || 0;
+    if (ecoRating < 60) return false;
+    return true;
+  });
 
   if (availableFurnaces.length === 0) {
-    throw new AppError('暂无可用火化炉（全部燃料不足或冷却中），请先补充燃料或等待冷却', 400);
+    const disabled = allFurnaces.filter((f) => f.status === FurnaceStatus.AVAILABLE);
+    const lowFuel = disabled.filter((f) => f.fuelLevel < MIN_FUEL_THRESHOLD).length;
+    const lowEco = disabled.filter((f) => (FURNACE_ECO_RATING[f.type] || 0) < 60).length;
+    const cooling = allFurnaces.filter((f) => f.status === FurnaceStatus.COOLING_DOWN).length;
+    const reasons = [];
+    if (lowFuel > 0) reasons.push(`${lowFuel}台燃料不足(<${MIN_FUEL_THRESHOLD}%)`);
+    if (lowEco > 0) reasons.push(`${lowEco}台环保不达标(<60分)`);
+    if (cooling > 0) reasons.push(`${cooling}台冷却中`);
+    throw new AppError(`暂无可用火化炉（${reasons.join('；')}），请先补充燃料、维护或等待冷却`, 400);
   }
 
   const existingQueued = await prisma.cremation.count({
@@ -83,8 +95,7 @@ export const generateCremationSequence = async () => {
     const existing = await prisma.cremation.findUnique({ where: { remainsId: remains.id } });
     if (existing) continue;
 
-    let selectedFurnace: any = null;
-    let sortReason = '';
+    const sequenceNo = existingQueued + cremations.length + 1;
 
     const ecoFurnaces = availableFurnaces.filter(
       (f) => FURNACE_ECO_RATING[f.type] >= 80
@@ -93,10 +104,13 @@ export const generateCremationSequence = async () => {
     const candidates = ecoFurnaces.length > 0 ? ecoFurnaces : availableFurnaces;
 
     let bestScore = -Infinity;
+    let selectedFurnace: any = null;
+    let sortReasons: string[] = [];
+
     for (const furnace of candidates) {
       const remainingFuel = furnaceRemainingFuel.get(furnace.id) || 0;
       const queueCount = furnaceQueueCount.get(furnace.id) || 0;
-      const canFit = remainingFuel - FUEL_CONSUMPTION_PER_CREMATION >= MIN_FUEL_THRESHOLD || remainingFuel >= FUEL_CONSUMPTION_PER_CREMATION;
+      const canFit = remainingFuel - FUEL_CONSUMPTION_PER_CREMATION >= MIN_FUEL_THRESHOLD;
 
       if (!canFit) continue;
 
@@ -112,18 +126,17 @@ export const generateCremationSequence = async () => {
     }
 
     if (!selectedFurnace) {
-      const backupFurnace = availableFurnaces.find((f) => {
+      const backup = availableFurnaces.find((f) => {
         const remaining = furnaceRemainingFuel.get(f.id) || 0;
-        return remaining >= FUEL_CONSUMPTION_PER_CREMATION * 0.5;
+        return remaining >= FUEL_CONSUMPTION_PER_CREMATION;
       });
-      if (backupFurnace) {
-        selectedFurnace = backupFurnace;
-        sortReason = '燃料紧张，优先安排燃料相对充足的火化炉';
+      if (backup) {
+        selectedFurnace = backup;
       }
     }
 
     if (!selectedFurnace) {
-      allocationReasons.push(`【${remains.name}】暂无燃料充足的火化炉，无法安排`);
+      allocationReasons.push(`【${remains.name}】所有炉燃料不足，无法安排`);
       continue;
     }
 
@@ -131,27 +144,29 @@ export const generateCremationSequence = async () => {
     const ecoRating = FURNACE_ECO_RATING[furnaceType] || 0;
     const remainingFuel = furnaceRemainingFuel.get(selectedFurnace.id) || 0;
     const queueCount = furnaceQueueCount.get(selectedFurnace.id) || 0;
+    const typeName = FURNACE_NAMES[furnaceType] || furnaceType;
 
-    if (!sortReason) {
-      const reasons: string[] = [];
-      reasons.push(`环保评级${ecoRating}分`);
-      reasons.push(`${FURNACE_NAMES[furnaceType]}排放控制优`);
-      reasons.push(`剩余燃料${remainingFuel.toFixed(0)}%`);
-      if (queueCount > 0) {
-        reasons.push(`该炉已排${queueCount}具，平衡负载`);
-      }
-      if (remains.ceremony) {
-        reasons.push('已完成告别仪式，优先处理');
-      }
-      sortReason = reasons.join('；');
+    sortReasons.push(`序列#${sequenceNo}：`);
+    sortReasons.push(`选择${selectedFurnace.furnaceNo}(${typeName})`);
+    sortReasons.push(`环保评级${ecoRating}分${ecoRating >= 80 ? '(优先推荐)' : ''}`);
+    sortReasons.push(`剩余燃料${remainingFuel.toFixed(0)}%≥${MIN_FUEL_THRESHOLD}%阈值`);
+    if (queueCount > 0) {
+      sortReasons.push(`该炉当前队列${queueCount}具，负载均衡`);
+    } else {
+      sortReasons.push(`该炉当前空闲，优先分配`);
+    }
+    if (remains.ceremony) {
+      sortReasons.push(`已完成告别仪式，优先处理`);
+    } else {
+      sortReasons.push(`按死亡日期排序（${dayjs(remains.deathDate).format('YYYY-MM-DD')}）`);
     }
 
     cremations.push({
       remainsId: remains.id,
       furnaceId: selectedFurnace.id,
-      sequence: existingQueued + cremations.length + 1,
+      sequence: sequenceNo,
       status: CremationStatus.QUEUED,
-      sortReason: `排序原因：${sortReason}`,
+      sortReason: sortReasons.join('；'),
     });
 
     const newFuel = remainingFuel - FUEL_CONSUMPTION_PER_CREMATION;
@@ -166,10 +181,24 @@ export const generateCremationSequence = async () => {
       id: f.id,
       furnaceNo: f.furnaceNo,
       type: f.type,
+      typeName: FURNACE_NAMES[f.type] || f.type,
       initialFuel: f.fuelLevel,
       remainingFuel: furnaceRemainingFuel.get(f.id) || 0,
       allocated: furnaceQueueCount.get(f.id) || 0,
       ecoRating: FURNACE_ECO_RATING[f.type] || 0,
+      ecoPass: (FURNACE_ECO_RATING[f.type] || 0) >= 60,
+    })),
+    excludedFurnaces: allFurnaces.filter((f) => !availableFurnaces.includes(f)).map((f) => ({
+      id: f.id,
+      furnaceNo: f.furnaceNo,
+      status: f.status,
+      fuelLevel: f.fuelLevel,
+      ecoRating: FURNACE_ECO_RATING[f.type] || 0,
+      reason: f.status !== FurnaceStatus.AVAILABLE
+        ? `状态：${f.status}`
+        : f.fuelLevel < MIN_FUEL_THRESHOLD
+          ? `燃料不足${f.fuelLevel}%<${MIN_FUEL_THRESHOLD}%`
+          : `环保不达标${FURNACE_ECO_RATING[f.type] || 0}分<60分`
     })),
   };
 };

@@ -225,7 +225,64 @@ router.get('/', [
       include: { user: { select: { realName: true, role: true, phone: true, maxWorkHours: true, skills: true } } },
       orderBy: [{ date: 'asc' }, { userId: 'asc' }],
     });
-    res.json(schedules);
+
+    const userStats: Record<string, { hours: number; shifts: number; maxHours: number; skills: string; role: string; name: string }> = {};
+    for (const s of schedules) {
+      if (!userStats[s.userId]) {
+        userStats[s.userId] = {
+          hours: 0,
+          shifts: 0,
+          maxHours: (s.user as any).maxWorkHours ? (s.user as any).maxWorkHours * 7 : 56,
+          skills: (s.user as any).skills || '',
+          role: (s.user as any).role || '',
+          name: (s.user as any).realName || '',
+        };
+      }
+      if (s.shiftType !== ShiftType.DAY_OFF) {
+        userStats[s.userId].hours += SHIFT_HOURS[s.shiftType] || 8;
+        userStats[s.userId].shifts += 1;
+      }
+    }
+
+    const dailyCoverage: Record<string, Record<string, Set<string>>> = {};
+    for (const s of schedules) {
+      const dateKey = dayjs(s.date).format('YYYY-MM-DD');
+      if (!dailyCoverage[dateKey]) {
+        dailyCoverage[dateKey] = { MORNING: new Set(), AFTERNOON: new Set(), NIGHT: new Set() };
+      }
+      if (s.shiftType !== ShiftType.DAY_OFF) {
+        const skill = roleToSkill((s.user as any).role);
+        if (skill) {
+          dailyCoverage[dateKey][s.shiftType].add(skill);
+        }
+      }
+    }
+
+    const dailyCoveragePlain: Record<string, any> = {};
+    for (const [date, shifts] of Object.entries(dailyCoverage)) {
+      dailyCoveragePlain[date] = {};
+      for (const [shift, skills] of Object.entries(shifts)) {
+        dailyCoveragePlain[date][shift] = {
+          skills: Array.from(skills),
+          hasHost: skills.has('HOST'),
+          hasCremator: skills.has('CREMATOR'),
+          hasReception: skills.has('RECEPTION'),
+          allCovered: skills.has('HOST') && skills.has('CREMATOR') && skills.has('RECEPTION'),
+        };
+      }
+    }
+
+    res.json({
+      schedules,
+      userStats,
+      dailyCoverage: dailyCoveragePlain,
+      skillsMap: {
+        HOST: '司仪',
+        CREMATOR: '火化员',
+        RECEPTION: '接待员',
+        STAFF: '通用员工',
+      },
+    });
   } catch (error) {
     next(error);
   }
