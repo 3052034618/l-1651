@@ -1,0 +1,239 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+model User {
+  id           String    @id @default(uuid())
+  username     String    @unique
+  password     String
+  realName     String
+  role         String
+  phone        String?
+  skills       String
+  maxWorkHours Float     @default(8)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  schedules       Schedule[]
+  shiftRequests   ShiftRequest[]
+  ceremonies      Ceremony[]       @relation("ceremonyHost")
+  createdRemains  Remains[]        @relation("remainsCreator")
+}
+
+model Remains {
+  id                   String   @id @default(uuid())
+  name                 String
+  gender               String
+  idCardNumber         String   @unique
+  birthDate            DateTime
+  deathDate            DateTime
+  deathCause           String
+  deathCertNumber      String   @unique
+  deathCertIssuer      String
+  familyName           String
+  familyPhone          String
+  familyRelation       String
+  status               String   @default("REGISTERED")
+  storageRequirement   String
+  expectedCeremonyTime DateTime?
+  cabinetId            String?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  createdBy            String
+  creator              User             @relation("remainsCreator", fields: [createdBy], references: [id])
+  cabinet              StorageCabinet? @relation(fields: [cabinetId], references: [id])
+  ceremony             Ceremony?
+  cremation            Cremation?
+  ashes                Ashes?
+  fees                 FeeRecord[]
+
+  @@index([status])
+  @@index([deathDate])
+}
+
+model StorageCabinet {
+  id          String    @id @default(uuid())
+  cabinetNo   String    @unique
+  row         Int
+  col         Int
+  type        String
+  status      String    @default("AVAILABLE")
+  temperature Float?
+  remains     Remains[]
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+model CeremonyHall {
+  id         String    @id @default(uuid())
+  hallNo     String    @unique
+  name       String
+  capacity   Int
+  facilities String
+  status     String    @default("AVAILABLE")
+  ceremonies Ceremony[]
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+}
+
+model Ceremony {
+  id               String   @id @default(uuid())
+  remainsId        String   @unique
+  hallId           String
+  hostId           String
+  startTime        DateTime
+  endTime          DateTime
+  status           String   @default("PENDING")
+  familyPreference String?
+  approvedBy       String?
+  approvedAt       DateTime?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  remains          Remains      @relation(fields: [remainsId], references: [id])
+  hall             CeremonyHall @relation(fields: [hallId], references: [id])
+  host             User         @relation("ceremonyHost", fields: [hostId], references: [id])
+}
+
+model CremationFurnace {
+  id              String    @id @default(uuid())
+  furnaceNo       String    @unique
+  type            String
+  status          String    @default("AVAILABLE")
+  fuelLevel       Float     @default(100)
+  lastMaintenance DateTime?
+  cremations      Cremation[]
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+}
+
+model Cremation {
+  id            String   @id @default(uuid())
+  remainsId     String   @unique
+  furnaceId     String
+  startTime     DateTime?
+  endTime       DateTime?
+  fuelUsed      Float?
+  emissionLevel Float?
+  sequence      Int
+  status        String   @default("QUEUED")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  remains       Remains         @relation(fields: [remainsId], references: [id])
+  furnace       CremationFurnace @relation(fields: [furnaceId], references: [id])
+
+  @@index([status, sequence])
+}
+
+model AshesNiche {
+  id        String   @id @default(uuid())
+  nicheNo   String   @unique
+  area      String
+  row       Int
+  col       Int
+  level     String
+  price     Float
+  status    String   @default("AVAILABLE")
+  ashes     Ashes[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Ashes {
+  id           String   @id @default(uuid())
+  remainsId    String   @unique
+  nicheId      String
+  storageStart DateTime
+  storageEnd   DateTime?
+  pickupCode   String   @unique
+  pickupStatus String   @default("NOT_PICKED")
+  pickedUpBy   String?
+  pickedUpAt   DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  remains      Remains    @relation(fields: [remainsId], references: [id])
+  niche        AshesNiche @relation(fields: [nicheId], references: [id])
+}
+
+model FeeItem {
+  id          String      @id @default(uuid())
+  category    String
+  name        String
+  price       Float
+  unit        String
+  description String?
+  isActive    Boolean     @default(true)
+  records     FeeRecord[]
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+}
+
+model FeeRecord {
+  id        String   @id @default(uuid())
+  remainsId String
+  feeItemId String
+  paymentId String?
+  quantity  Float    @default(1)
+  unitPrice Float
+  subtotal  Float
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  remains   Remains  @relation(fields: [remainsId], references: [id])
+  feeItem   FeeItem  @relation(fields: [feeItemId], references: [id])
+  payment   Payment? @relation(fields: [paymentId], references: [id])
+}
+
+model Payment {
+  id            String      @id @default(uuid())
+  remainsId     String      @unique
+  totalAmount   Float
+  paidAmount    Float       @default(0)
+  paymentStatus String      @default("UNPAID")
+  paymentMethod String?
+  paidAt        DateTime?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  records       FeeRecord[]
+}
+
+model Schedule {
+  id        String   @id @default(uuid())
+  userId    String
+  date      DateTime
+  shiftType String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id])
+
+  @@unique([userId, date])
+}
+
+model ShiftRequest {
+  id             String   @id @default(uuid())
+  userId         String
+  originalDate   DateTime
+  originalShift  String
+  requestedDate  DateTime
+  requestedShift String
+  reason         String
+  status         String   @default("PENDING")
+  approvedBy     String?
+  approvedAt     DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  user           User     @relation(fields: [userId], references: [id])
+}
+
+model Notification {
+  id        String   @id @default(uuid())
+  type      String
+  title     String
+  content   String
+  targetId  String?
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+}
