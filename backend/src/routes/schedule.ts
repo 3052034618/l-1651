@@ -572,6 +572,56 @@ router.post('/shift-requests/:id/approve', requireRoles(UserRole.ADMIN, UserRole
           },
         });
       }
+
+      if (shiftRequest.targetUserId) {
+        const targetOriginalSchedule = await tx.schedule.findUnique({
+          where: {
+            userId_date: {
+              userId: shiftRequest.targetUserId,
+              date: requestedDate,
+            },
+          },
+        });
+        if (targetOriginalSchedule) {
+          await tx.schedule.update({
+            where: {
+              userId_date: {
+                userId: shiftRequest.targetUserId,
+                date: requestedDate,
+              },
+            },
+            data: { shiftType: ShiftType.DAY_OFF },
+          });
+        }
+
+        const targetRequestedSchedule = await tx.schedule.findUnique({
+          where: {
+            userId_date: {
+              userId: shiftRequest.targetUserId,
+              date: originalDate,
+            },
+          },
+        });
+        if (targetRequestedSchedule) {
+          await tx.schedule.update({
+            where: {
+              userId_date: {
+                userId: shiftRequest.targetUserId,
+                date: originalDate,
+              },
+            },
+            data: { shiftType: shiftRequest.originalShift },
+          });
+        } else {
+          await tx.schedule.create({
+            data: {
+              userId: shiftRequest.targetUserId,
+              date: originalDate,
+              shiftType: shiftRequest.originalShift,
+            },
+          });
+        }
+      }
     });
 
     const originalDateStr = dayjs(shiftRequest.originalDate).format('MM-DD') + ' ' + shiftRequest.originalShift;

@@ -243,9 +243,8 @@ const PaymentList = () => {
           </Button>
           {record.paymentStatus !== 'PAID' && (
             <Button
-              type="link"
-              size="small"
               type="primary"
+              size="small"
               icon={<CreditCardOutlined />}
               onClick={() => handlePay(record.remainsId)}
             >

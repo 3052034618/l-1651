@@ -40,9 +40,6 @@ export const generateCremationSequence = async () => {
   if (remainsList.length === 0) return { cremations: [], reasons: [] };
 
   const allFurnaces = await prisma.cremationFurnace.findMany({
-    where: {
-      status: { in: [FurnaceStatus.AVAILABLE, FurnaceStatus.COOLING_DOWN] },
-    },
     orderBy: [
       { type: 'asc' },
       { fuelLevel: 'desc' },
@@ -58,15 +55,21 @@ export const generateCremationSequence = async () => {
   });
 
   if (availableFurnaces.length === 0) {
-    const disabled = allFurnaces.filter((f) => f.status === FurnaceStatus.AVAILABLE);
-    const lowFuel = disabled.filter((f) => f.fuelLevel < MIN_FUEL_THRESHOLD).length;
-    const lowEco = disabled.filter((f) => (FURNACE_ECO_RATING[f.type] || 0) < 60).length;
+    const inMaintenance = allFurnaces.filter((f) => f.status === FurnaceStatus.MAINTENANCE).length;
+    const inUse = allFurnaces.filter((f) => f.status === FurnaceStatus.IN_USE).length;
     const cooling = allFurnaces.filter((f) => f.status === FurnaceStatus.COOLING_DOWN).length;
+    const available = allFurnaces.filter((f) => f.status === FurnaceStatus.AVAILABLE);
+    const lowFuel = available.filter((f) => f.fuelLevel < MIN_FUEL_THRESHOLD).length;
+    const lowEco = available.filter((f) => (FURNACE_ECO_RATING[f.type] || 0) < 60).length;
+
     const reasons = [];
+    if (inMaintenance > 0) reasons.push(`${inMaintenance}台维护中`);
+    if (inUse > 0) reasons.push(`${inUse}台使用中`);
+    if (cooling > 0) reasons.push(`${cooling}台冷却中`);
     if (lowFuel > 0) reasons.push(`${lowFuel}台燃料不足(<${MIN_FUEL_THRESHOLD}%)`);
     if (lowEco > 0) reasons.push(`${lowEco}台环保不达标(<60分)`);
-    if (cooling > 0) reasons.push(`${cooling}台冷却中`);
-    throw new AppError(`暂无可用火化炉（${reasons.join('；')}），请先补充燃料、维护或等待冷却`, 400);
+
+    throw new AppError(`暂无可用火化炉（${reasons.join('；')}），请先补充燃料、维护或等待`, 400);
   }
 
   const existingQueued = await prisma.cremation.count({
@@ -188,18 +191,23 @@ export const generateCremationSequence = async () => {
       ecoRating: FURNACE_ECO_RATING[f.type] || 0,
       ecoPass: (FURNACE_ECO_RATING[f.type] || 0) >= 60,
     })),
-    excludedFurnaces: allFurnaces.filter((f) => !availableFurnaces.includes(f)).map((f) => ({
-      id: f.id,
-      furnaceNo: f.furnaceNo,
-      status: f.status,
-      fuelLevel: f.fuelLevel,
-      ecoRating: FURNACE_ECO_RATING[f.type] || 0,
-      reason: f.status !== FurnaceStatus.AVAILABLE
-        ? `状态：${f.status}`
-        : f.fuelLevel < MIN_FUEL_THRESHOLD
-          ? `燃料不足${f.fuelLevel}%<${MIN_FUEL_THRESHOLD}%`
-          : `环保不达标${FURNACE_ECO_RATING[f.type] || 0}分<60分`
-    })),
+    excludedFurnaces: allFurnaces.filter((f) => !availableFurnaces.includes(f)).map((f) => {
+      let reason = '';
+      if (f.status === FurnaceStatus.MAINTENANCE) reason = '维护中';
+      else if (f.status === FurnaceStatus.IN_USE) reason = '使用中';
+      else if (f.status === FurnaceStatus.COOLING_DOWN) reason = '冷却中';
+      else if (f.status === FurnaceStatus.AVAILABLE && f.fuelLevel < MIN_FUEL_THRESHOLD) reason = `燃料不足${f.fuelLevel}%<${MIN_FUEL_THRESHOLD}%`;
+      else if (f.status === FurnaceStatus.AVAILABLE && (FURNACE_ECO_RATING[f.type] || 0) < 60) reason = `环保不达标${FURNACE_ECO_RATING[f.type] || 0}分<60分`;
+      else reason = '其他原因';
+      return {
+        id: f.id,
+        furnaceNo: f.furnaceNo,
+        status: f.status,
+        fuelLevel: f.fuelLevel,
+        ecoRating: FURNACE_ECO_RATING[f.type] || 0,
+        reason,
+      };
+    }),
   };
 };
 
