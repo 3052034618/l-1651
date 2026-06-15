@@ -20,6 +20,8 @@ import {
   Progress,
   Descriptions,
   Divider,
+  Alert,
+  Tooltip,
 } from 'antd';
 import {
   CalendarOutlined,
@@ -30,6 +32,8 @@ import {
   UserOutlined,
   TeamOutlined,
   ThunderboltOutlined,
+  WarningOutlined,
+  ExclamationCircleOutlined,
 } from '@ant-design/icons';
 import { scheduleApi } from '../../api/endpoints';
 import { Schedule, SHIFT_TYPE_MAP, ShiftType } from '../../types';
@@ -62,12 +66,20 @@ const roleMap: Record<string, string> = {
   SUPERVISOR: '主管',
 };
 
+const skillLabelMap: Record<string, string> = {
+  HOST: '司仪',
+  CREMATOR: '火化员',
+  RECEPTION: '接待员',
+};
+
 const ScheduleList = () => {
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<Schedule[]>([]);
   const [userStats, setUserStats] = useState<Record<string, any>>({});
   const [dailyCoverage, setDailyCoverage] = useState<Record<string, any>>({});
   const [skillsMap, setSkillsMap] = useState<Record<string, string>>({});
+  const [coverageGaps, setCoverageGaps] = useState<any[]>([]);
+  const [poolStats, setPoolStats] = useState<Record<string, number>>({});
   const [requests, setRequests] = useState<any[]>([]);
   const [dateRange, setDateRange] = useState<any>([dayjs().startOf('week'), dayjs().endOf('week')]);
   const [generateVisible, setGenerateVisible] = useState(false);
@@ -87,6 +99,8 @@ const ScheduleList = () => {
         setUserStats(res.userStats || {});
         setDailyCoverage(res.dailyCoverage || {});
         setSkillsMap(res.skillsMap || {});
+        setCoverageGaps(res.coverageGaps || []);
+        setPoolStats(res.poolStats || {});
       } else {
         setData(res as Schedule[]);
       }
@@ -110,8 +124,16 @@ const ScheduleList = () => {
   const handleGenerate = async () => {
     try {
       const res: any = await scheduleApi.generateWeekly(generateDate.format('YYYY-MM-DD'));
-      message.success(`已生成 ${res.count} 条排班记录`);
       setGenerateVisible(false);
+      if (res.coverageGaps && res.coverageGaps.length > 0) {
+        setCoverageGaps(res.coverageGaps || []);
+        setDailyCoverage(res.dailyCoverage || {});
+        setPoolStats(res.poolStats || {});
+        message.warning(`已生成 ${res.count} 条排班，但 ${res.coverageGaps.length} 个班次存在岗位缺口，请查看下方详情`);
+      } else {
+        setCoverageGaps([]);
+        message.success(`已生成 ${res.count} 条排班记录，所有岗位已覆盖`);
+      }
       loadSchedule();
     } catch (e) {}
   };
@@ -252,6 +274,63 @@ const ScheduleList = () => {
             <Button type="primary" onClick={loadSchedule}>查询</Button>
           </Space>
 
+          <Alert
+            type="info"
+            showIcon
+            style={{ marginBottom: 16 }}
+            message="排班规则说明"
+            description={
+              <Space size={16} wrap>
+                <Tag color="blue"><TeamOutlined /> 每班次至少2人</Tag>
+                <Tag color="green"><UserOutlined /> 早/午/夜必须覆盖司仪、火化员、接待员</Tag>
+                <Tag color="purple"><ThunderboltOutlined /> 每人周工时不超过上限</Tag>
+                <Tag color="orange"><WarningOutlined /> 有岗位缺口会在下方标红列出原因</Tag>
+                {Object.keys(poolStats).length > 0 && (
+                  <>
+                    <Divider type="vertical" />
+                    <Tag color="cyan">人员池：司仪 {poolStats.HOST || 0}人</Tag>
+                    <Tag color="cyan">火化员 {poolStats.CREMATOR || 0}人</Tag>
+                    <Tag color="cyan">接待员 {poolStats.RECEPTION || 0}人</Tag>
+                  </>
+                )}
+              </Space>
+            }
+          />
+
+          {coverageGaps.length > 0 && (
+            <Alert
+              type="error"
+              showIcon
+              style={{ marginBottom: 16 }}
+              message={`共有 ${coverageGaps.length} 个班次存在岗位缺口，请人工补位或调班`}
+              description={
+                <Row gutter={[8, 8]}>
+                  {coverageGaps.map((gap, i) => (
+                    <Col xs={24} sm={12} md={8} key={i}>
+                      <Descriptions column={1} size="small" bordered>
+                        <Descriptions.Item label="日期/班次">
+                          <Tag color="red">{dayjs(gap.date).format('MM-DD')} {SHIFT_TYPE_MAP[gap.shift as ShiftType]}</Tag>
+                        </Descriptions.Item>
+                        <Descriptions.Item label="缺岗">
+                          <Space>
+                            {(gap.missingSkills || []).map((s: string) => (
+                              <Tag key={s} color="red" icon={<ExclamationCircleOutlined />}>
+                                {skillLabelMap[s] || s}
+                              </Tag>
+                            ))}
+                          </Space>
+                        </Descriptions.Item>
+                        <Descriptions.Item label="缺岗原因">
+                          <span style={{ color: '#ff4d4f', fontSize: 12 }}>{gap.reason}</span>
+                        </Descriptions.Item>
+                      </Descriptions>
+                    </Col>
+                  ))}
+                </Row>
+              }
+            />
+          )}
+
           {Object.keys(dailyCoverage).length > 0 && (
             <Card title="每日岗位覆盖情况" size="small" style={{ marginBottom: 16 }}>
               <Row gutter={[8, 8]}>
@@ -264,18 +343,31 @@ const ScheduleList = () => {
                           {['MORNING', 'AFTERNOON', 'NIGHT'].map((shift) => {
                             const shiftData = coverage[shift] || {};
                             const shiftLabel = SHIFT_TYPE_MAP[shift as ShiftType];
+                            const missing = shiftData.missingSkills || [];
+                            const hasGap = missing.length > 0;
                             return (
-                              <Descriptions.Item key={shift} label={shiftLabel}>
+                              <Descriptions.Item key={shift} label={
+                                <Space>
+                                  <span>{shiftLabel}</span>
+                                  {hasGap && <Tag color="red" style={{ margin: 0 }}>缺{missing.length}岗</Tag>}
+                                </Space>
+                              }>
                                 <Space size={4} wrap>
-                                  <Tag color={shiftData.hasHost ? 'green' : 'red'}>
-                                    {shiftData.hasHost ? '✓ 司仪' : '✗ 司仪'}
-                                  </Tag>
-                                  <Tag color={shiftData.hasCremator ? 'green' : 'red'}>
-                                    {shiftData.hasCremator ? '✓ 火化员' : '✗ 火化员'}
-                                  </Tag>
-                                  <Tag color={shiftData.hasReception ? 'green' : 'red'}>
-                                    {shiftData.hasReception ? '✓ 接待' : '✗ 接待'}
-                                  </Tag>
+                                  <Tooltip title={shiftData.hasHost ? '司仪已覆盖' : missing.includes('HOST') ? '司仪缺口' : ''}>
+                                    <Tag color={shiftData.hasHost ? 'green' : 'red'}>
+                                      {shiftData.hasHost ? '✓ 司仪' : '✗ 司仪'}
+                                    </Tag>
+                                  </Tooltip>
+                                  <Tooltip title={shiftData.hasCremator ? '火化员已覆盖' : missing.includes('CREMATOR') ? '火化员缺口' : ''}>
+                                    <Tag color={shiftData.hasCremator ? 'green' : 'red'}>
+                                      {shiftData.hasCremator ? '✓ 火化员' : '✗ 火化员'}
+                                    </Tag>
+                                  </Tooltip>
+                                  <Tooltip title={shiftData.hasReception ? '接待员已覆盖' : missing.includes('RECEPTION') ? '接待员缺口' : ''}>
+                                    <Tag color={shiftData.hasReception ? 'green' : 'red'}>
+                                      {shiftData.hasReception ? '✓ 接待' : '✗ 接待'}
+                                    </Tag>
+                                  </Tooltip>
                                 </Space>
                               </Descriptions.Item>
                             );

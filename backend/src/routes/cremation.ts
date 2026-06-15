@@ -225,8 +225,10 @@ router.post('/generate-sequence', async (req, res, next) => {
       cremations,
       reasons: result.reasons,
       furnaceStats: result.furnaceStats,
+      excludedFurnaces: result.excludedFurnaces || [],
       algorithmInfo: {
         minFuelThreshold: MIN_FUEL_THRESHOLD,
+        minEcoRating: 60,
         maxEmission: MAX_EMISSION_LEVEL,
         fuelPerCremation: FUEL_CONSUMPTION_PER_CREMATION,
         ecoPriority: '优先选择环保等级≥80分的火化炉',

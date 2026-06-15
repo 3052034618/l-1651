@@ -163,7 +163,9 @@ router.get('/remains-to-bill', [
       take: 50,
     });
 
-    const result = remainsList.map((r: any) => ({
+    const unbilledOnly = remainsList.filter((r: any) => !r.payment);
+
+    const result = unbilledOnly.map((r: any) => ({
       id: r.id,
       name: r.name,
       idCardNumber: r.idCardNumber,

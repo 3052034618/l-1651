@@ -11,6 +11,12 @@ import {
   Form,
   Input,
   Popconfirm,
+  Alert,
+  Descriptions,
+  Tooltip,
+  Card,
+  Row,
+  Col,
 } from 'antd';
 import {
   CalendarOutlined,
@@ -19,6 +25,12 @@ import {
   CloseCircleOutlined,
   LikeOutlined,
   DislikeOutlined,
+  CheckOutlined,
+  WarningOutlined,
+  TeamOutlined,
+  UserOutlined,
+  EnvironmentOutlined,
+  InfoCircleOutlined,
 } from '@ant-design/icons';
 import { ceremonyApi } from '../../api/endpoints';
 import { Ceremony, CEREMONY_STATUS_MAP } from '../../types';
@@ -36,6 +48,14 @@ const statusColorMap: Record<string, string> = {
   REJECTED: 'red',
 };
 
+const PREFERENCE_LABEL_MAP: Record<string, string> = {
+  SIMPLE: '简约',
+  TRADITIONAL: '传统',
+  BUDDHIST: '佛教',
+  CHRISTIAN: '基督教',
+  CUSTOM: '个性化',
+};
+
 const CeremonyList = () => {
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<Ceremony[]>([]);
@@ -43,6 +63,7 @@ const CeremonyList = () => {
   const [rejectVisible, setRejectVisible] = useState(false);
   const [rejectId, setRejectId] = useState<string>('');
   const [rejectForm] = Form.useForm();
+  const [unmatchedList, setUnmatchedList] = useState<any[]>([]);
 
   const loadData = async () => {
     setLoading(true);
@@ -67,7 +88,13 @@ const CeremonyList = () => {
       onOk: async () => {
         try {
           const res: any = await ceremonyApi.generateSchedule(date.format('YYYY-MM-DD'));
-          message.success(`已生成 ${res.count} 条排程`);
+          if (res.unmatchedCount && res.unmatchedCount > 0) {
+            setUnmatchedList(res.unmatchedDetails || []);
+            message.warning(`已生成 ${res.count} 条排程，${res.unmatchedCount} 条未排成功，请查看下方详情`);
+          } else {
+            setUnmatchedList([]);
+            message.success(`已生成 ${res.count} 条排程`);
+          }
           loadData();
         } catch (e) {}
       },
@@ -118,7 +145,7 @@ const CeremonyList = () => {
     {
       title: '时间',
       key: 'time',
-      width: 180,
+      width: 170,
       render: (_: any, r: Ceremony) => (
         <div>
           <div>{dayjs(r.startTime).format('HH:mm')} - {dayjs(r.endTime).format('HH:mm')}</div>
@@ -133,42 +160,75 @@ const CeremonyList = () => {
       width: 100,
     },
     {
-      title: '家属',
-      dataIndex: ['remains', 'familyName'],
-      key: 'familyName',
-      width: 100,
+      title: '家属偏好',
+      dataIndex: ['remains', 'ceremonyPreference'],
+      key: 'preference',
+      width: 110,
+      render: (v: string) => v ? (
+        <Tag color="purple">
+          <InfoCircleOutlined /> {PREFERENCE_LABEL_MAP[v] || v}
+        </Tag>
+      ) : <span style={{ color: '#999' }}>无</span>,
     },
     {
       title: '告别厅',
       dataIndex: ['hall', 'name'],
       key: 'hall',
       width: 120,
-      render: (v: string, r: Ceremony) => (
+      render: (v: string, r: Ceremony) => v ? (
         <div>
-          <div>{v}</div>
+          <div><EnvironmentOutlined /> {v}</div>
           <div style={{ color: '#999', fontSize: 12 }}>容纳{r.hall?.capacity}人</div>
         </div>
-      ),
+      ) : <Tag color="red"><WarningOutlined /> 未分配</Tag>,
     },
     {
-      title: '司仪',
-      dataIndex: ['host', 'realName'],
-      key: 'host',
-      width: 100,
+      title: '司仪与资质',
+      key: 'hostDetail',
+      width: 200,
+      render: (_: any, r: any) => {
+        if (!r.host?.realName) {
+          return <Tag color="red"><WarningOutlined /> 未分配司仪</Tag>;
+        }
+        const skills: string[] = r.hostSkills || (r.host?.skills ? r.host.skills.split(',') : []) || [];
+        const matched: boolean = r.preferenceMatched;
+        const pref = r.remains?.ceremonyPreference;
+        return (
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <UserOutlined /> <span style={{ fontWeight: 600 }}>{r.host.realName}</span>
+              {pref && (matched
+                ? <Tag color="green" icon={<CheckOutlined />}>偏好匹配</Tag>
+                : <Tag color="orange" icon={<WarningOutlined />}>资质不符</Tag>)}
+            </div>
+            <div style={{ marginTop: 4 }}>
+              {skills.length > 0 ? skills.map((s, i) => (
+                <Tag key={i} color="blue" style={{ marginBottom: 2 }}>{s}</Tag>
+              )) : <Tag>通用</Tag>}
+            </div>
+          </div>
+        );
+      },
     },
     {
       title: '预计人数',
       dataIndex: ['remains', 'expectedAttendees'],
       key: 'expectedAttendees',
       width: 90,
-      render: (v: number) => v ? `${v}人` : '-',
+      render: (v: number) => v ? <Tag><TeamOutlined /> {v}人</Tag> : '-',
     },
     {
       title: '分配原因',
       dataIndex: 'allocationReason',
       key: 'allocationReason',
-      width: 220,
-      render: (v: string) => v || '-',
+      width: 300,
+      render: (v: string) => v ? (
+        <Tooltip title={v}>
+          <span style={{ fontSize: 12, color: v.includes('未排成功') ? '#ff4d4f' : '#555', display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+            {v}
+          </span>
+        </Tooltip>
+      ) : '-',
     },
     {
       title: '状态',
@@ -184,7 +244,7 @@ const CeremonyList = () => {
     {
       title: '操作',
       key: 'actions',
-      width: 260,
+      width: 220,
       render: (_: any, record: Ceremony) => (
         <Space size="small">
           {record.status === 'PENDING' && (
@@ -245,12 +305,53 @@ const CeremonyList = () => {
         </Space>
       </div>
 
+      <Alert
+        type="info"
+        showIcon
+        style={{ marginBottom: 16 }}
+        message="排程规则"
+        description={
+          <Space size={16} wrap>
+            <Tag color="blue"><TeamOutlined /> 按预计人数匹配最小容量厅</Tag>
+            <Tag color="green"><UserOutlined /> 优先匹配家属偏好对应司仪资质</Tag>
+            <Tag color="orange"><WarningOutlined /> 资质不符时回退至时间可用司仪</Tag>
+            <Tag color="purple"><InfoCircleOutlined /> 未排成功会显示详细原因</Tag>
+          </Space>
+        }
+      />
+
+      {unmatchedList.length > 0 && (
+        <Card
+          type="inner"
+          style={{ marginBottom: 16 }}
+          title={<span><WarningOutlined style={{ color: '#faad14', marginRight: 8 }} />本次未排成功的遗体（共{unmatchedList.length}位，请人工调整）</span>}
+        >
+          <Row gutter={[8, 8]}>
+            {unmatchedList.map((u, i) => (
+              <Col xs={24} sm={12} md={8} key={i}>
+                <Descriptions column={1} size="small" bordered>
+                  <Descriptions.Item label="逝者姓名">{u.remainsName}</Descriptions.Item>
+                  <Descriptions.Item label="家属偏好">
+                    {u.preference ? <Tag color="purple">{u.preference}</Tag> : <span style={{ color: '#999' }}>无</span>}
+                  </Descriptions.Item>
+                  <Descriptions.Item label="预约时间">{u.time}</Descriptions.Item>
+                  <Descriptions.Item label="未排原因">
+                    <span style={{ color: '#ff4d4f', fontSize: 12 }}>{u.reason}</span>
+                  </Descriptions.Item>
+                </Descriptions>
+              </Col>
+            ))}
+          </Row>
+        </Card>
+      )}
+
       <div className="table-container">
         <Table
           loading={loading}
           columns={columns}
           dataSource={data}
           rowKey="id"
+          scroll={{ x: 1400 }}
         />
       </div>
 

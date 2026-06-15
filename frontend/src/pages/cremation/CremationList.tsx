@@ -102,9 +102,18 @@ const CremationList = () => {
       onOk: async () => {
         try {
           const res: any = await cremationApi.generateSequence();
-          message.success(`已生成 ${res.count} 条火化任务`);
           if (res.excludedFurnaces && res.excludedFurnaces.length > 0) {
             setExcludedFurnaces(res.excludedFurnaces);
+            const reasons = {};
+            res.excludedFurnaces.forEach((f: any) => {
+              const r = f.reason || '其他原因';
+              reasons[r] = (reasons[r] || 0) + 1;
+            });
+            const reasonText = Object.entries(reasons).map(([k, v]) => `${k}×${v}`).join('，');
+            message.warning(`已生成 ${res.count} 条火化任务，${res.excludedFurnaces.length} 台炉未进入候选：${reasonText}，详情见下方`);
+          } else {
+            setExcludedFurnaces([]);
+            message.success(`已生成 ${res.count} 条火化任务`);
           }
           loadData();
         } catch (e: any) {

@@ -11,6 +11,22 @@ import dayjs from 'dayjs';
 const router = Router();
 router.use(authMiddleware);
 
+const PREFERENCE_SKILL_MAP: Record<string, string> = {
+  SIMPLE: '简约仪式',
+  TRADITIONAL: '传统仪式',
+  BUDDHIST: '佛教仪式',
+  CHRISTIAN: '基督教仪式',
+  CUSTOM: '个性化定制',
+};
+
+const PREFERENCE_LABEL_MAP: Record<string, string> = {
+  SIMPLE: '简约',
+  TRADITIONAL: '传统',
+  BUDDHIST: '佛教',
+  CHRISTIAN: '基督教',
+  CUSTOM: '个性化',
+};
+
 export const generateDailySchedule = async (date: Date) => {
   const startOfDay = dayjs(date).startOf('day').toDate();
   const endOfDay = dayjs(date).endOf('day').toDate();
@@ -69,6 +85,12 @@ export const generateDailySchedule = async (date: Date) => {
   };
 
   const ceremonies: any[] = [];
+  const unmatchedDetails: any[] = [];
+
+  const hostSkillsMap = new Map<string, string[]>();
+  for (const host of hosts) {
+    hostSkillsMap.set(host.id, host.skills ? host.skills.split(',').filter(Boolean) : []);
+  }
 
   for (const remains of remainsList) {
     const existing = await prisma.ceremony.findUnique({ where: { remainsId: remains.id } });
@@ -79,73 +101,114 @@ export const generateDailySchedule = async (date: Date) => {
     const endTime = new Date(preferredTime.getTime() + durationMinutes * 60 * 1000);
     const attendees = remains.expectedAttendees || 50;
     const preference = remains.ceremonyPreference || '';
-
-    let allocated = false;
-    let allocationReason = '';
+    const prefLabel = preference ? (PREFERENCE_LABEL_MAP[preference] || preference) : '无偏好';
+    const prefSkill = preference ? (PREFERENCE_SKILL_MAP[preference] || '') : '';
 
     const suitableHalls = halls.filter((h) => h.capacity >= attendees);
-    if (suitableHalls.length === 0) {
-      allocationReason = `无容量≥${attendees}人的厅室，使用最大容量${halls[halls.length - 1].capacity}人厅室`;
-    } else {
-      allocationReason = `按预计${attendees}人匹配容量≥${attendees}的厅室`;
-    }
-
+    const hallReason = suitableHalls.length === 0
+      ? `无容量≥${attendees}人的厅室，最大容量${halls[halls.length - 1]?.capacity || 0}人`
+      : `按预计${attendees}人匹配容量≥${attendees}的厅室（共${suitableHalls.length}间）`;
     const candidateHalls = suitableHalls.length > 0 ? suitableHalls : halls.slice(-1);
+
+    const preferredHosts = hosts.filter((h) => {
+      const skills = hostSkillsMap.get(h.id) || [];
+      if (!prefSkill) return true;
+      return skills.some((s: string) => s.includes(prefSkill) || s.includes(prefLabel));
+    });
+
+    let finalReason = '';
+    let allocatedHall: any = null;
+    let allocatedHost: any = null;
 
     for (const hall of candidateHalls) {
       const hallSchedule = hallOccupancy.get(hall.id) || [];
       if (!isSlotAvailable(hallSchedule, preferredTime, endTime)) continue;
 
-      let matchedHost = null;
-      let hostMatchReason = '';
-
-      const hostsBySkill: any[] = [];
-      for (const host of hosts) {
-        const skills = host.skills ? host.skills.split(',') : [];
-        const hasPreference = preference && skills.some((s: string) => s.includes(preference));
-        hostsBySkill.push({ host, skills, hasPreference });
-      }
-      hostsBySkill.sort((a, b) => (b.hasPreference ? 1 : 0) - (a.hasPreference ? 1 : 0));
-
-      for (const { host, skills, hasPreference } of hostsBySkill) {
+      const hostCandidates = preferredHosts.length > 0 ? preferredHosts : hosts;
+      for (const host of hostCandidates) {
         const hostSchedule = hostOccupancy.get(host.id) || [];
         if (!isSlotAvailable(hostSchedule, preferredTime, endTime)) continue;
 
-        matchedHost = host;
-        if (hasPreference) {
-          hostMatchReason = `司仪${host.realName}具备"${preference}"相关技能，与家属偏好匹配`;
-        } else {
-          hostMatchReason = `司仪${host.realName}时间可用，技能：${skills.join('、') || '通用'}`;
-        }
+        allocatedHall = hall;
+        allocatedHost = host;
         break;
       }
+      if (allocatedHost) break;
+    }
 
-      if (!matchedHost) continue;
+    if (allocatedHall && allocatedHost) {
+      const hostSkills = hostSkillsMap.get(allocatedHost.id) || [];
+      const matchedByPreference = preference && (
+        hostSkills.some((s: string) => s.includes(prefSkill) || s.includes(prefLabel))
+      );
+      const hostMatchText = matchedByPreference
+        ? `✅ 司仪${allocatedHost.realName}技能【${hostSkills.join('、') || '通用'}】与家属偏好"${prefLabel}"匹配`
+        : preference && preferredHosts.length === 0
+          ? `⚠️ 无具备"${prefLabel}"资质司仪，已分配${allocatedHost.realName}（技能：${hostSkills.join('、') || '通用'}）`
+          : preference
+            ? `⚠️ ${preferredHosts.length}位具备"${prefLabel}"资质司仪均时间冲突，已分配${allocatedHost.realName}（技能：${hostSkills.join('、') || '通用'}）`
+            : `司仪${allocatedHost.realName}时间可用（技能：${hostSkills.join('、') || '通用'}）`;
 
-      const finalReason = `${allocationReason}；${hostMatchReason}；厅室：${hall.name}(${hall.capacity}人)`;
+      finalReason = `${hallReason}；厅室：${allocatedHall.name}(${allocatedHall.capacity}人)；${hostMatchText}`;
 
       ceremonies.push({
         remainsId: remains.id,
-        hallId: hall.id,
-        hostId: matchedHost.id,
+        hallId: allocatedHall.id,
+        hostId: allocatedHost.id,
         startTime: preferredTime,
         endTime,
         status: CeremonyStatus.PENDING,
         familyPreference: preference || null,
         allocationReason: finalReason,
+        hostSkills: hostSkills,
+        preferenceMatched: !!matchedByPreference,
       });
 
-      hallSchedule.push({ start: preferredTime, end: endTime });
-      hallOccupancy.set(hall.id, hallSchedule);
-      const hostSchedule = hostOccupancy.get(matchedHost.id) || [];
-      hostSchedule.push({ start: preferredTime, end: endTime });
-      hostOccupancy.set(matchedHost.id, hostSchedule);
+      const hSched = hallOccupancy.get(allocatedHall.id) || [];
+      hSched.push({ start: preferredTime, end: endTime });
+      hallOccupancy.set(allocatedHall.id, hSched);
+      const hostSched = hostOccupancy.get(allocatedHost.id) || [];
+      hostSched.push({ start: preferredTime, end: endTime });
+      hostOccupancy.set(allocatedHost.id, hostSched);
+    } else {
+      const reasons: string[] = [];
+      const availHalls = candidateHalls.filter((h) =>
+        isSlotAvailable(hallOccupancy.get(h.id) || [], preferredTime, endTime)
+      );
+      if (availHalls.length === 0) {
+        reasons.push(`厅室：${candidateHalls.length}间候选厅${dayjs(preferredTime).format('HH:mm')}均被占用`);
+      } else {
+        reasons.push(`厅室：${availHalls.length}间可用`);
+      }
 
-      allocated = true;
-      break;
-    }
+      if (preference) {
+        if (preferredHosts.length === 0) {
+          reasons.push(`司仪：共${hosts.length}位司仪，无具备"${prefLabel}"资质人员，请调整偏好或人工分配`);
+        } else {
+          const conflictHosts = preferredHosts.filter((h) =>
+            !isSlotAvailable(hostOccupancy.get(h.id) || [], preferredTime, endTime)
+          );
+          if (conflictHosts.length === preferredHosts.length) {
+            reasons.push(`司仪：${preferredHosts.length}位具备"${prefLabel}"资质司仪时间均冲突`);
+          } else {
+            const availHosts = preferredHosts.filter((h) =>
+              isSlotAvailable(hostOccupancy.get(h.id) || [], preferredTime, endTime)
+            );
+            reasons.push(`司仪：${availHosts.length}位具备"${prefLabel}"资质但未匹配（异常）`);
+          }
+        }
+      } else {
+        const availHosts = hosts.filter((h) =>
+          isSlotAvailable(hostOccupancy.get(h.id) || [], preferredTime, endTime)
+        );
+        if (availHosts.length === 0) {
+          reasons.push(`司仪：全部${hosts.length}位司仪该时段均被占用`);
+        } else {
+          reasons.push(`司仪：${availHosts.length}位可用但未匹配（异常）`);
+        }
+      }
 
-    if (!allocated) {
+      finalReason = `❌ 未排成功：${reasons.join('；')}`;
       ceremonies.push({
         remainsId: remains.id,
         hallId: '',
@@ -154,12 +217,20 @@ export const generateDailySchedule = async (date: Date) => {
         endTime,
         status: CeremonyStatus.PENDING,
         familyPreference: preference || null,
-        allocationReason: '无可用厅室或司仪，请手动调整',
+        allocationReason: finalReason,
+        hostSkills: [],
+        preferenceMatched: false,
+      });
+      unmatchedDetails.push({
+        remainsName: remains.name,
+        preference: prefLabel,
+        time: dayjs(preferredTime).format('HH:mm'),
+        reason: finalReason,
       });
     }
   }
 
-  return ceremonies;
+  return { ceremonies, unmatchedDetails };
 };
 
 router.post('/generate-schedule', [
@@ -168,7 +239,7 @@ router.post('/generate-schedule', [
 ], async (req: AuthRequest, res, next) => {
   try {
     const date = new Date(req.body.date);
-    const ceremonies = await generateDailySchedule(date);
+    const { ceremonies, unmatchedDetails } = await generateDailySchedule(date);
 
     const validCeremonies = ceremonies.filter((c) => c.hallId && c.hostId);
 
@@ -184,7 +255,13 @@ router.post('/generate-schedule', [
       });
     }
 
-    res.json({ count: validCeremonies.length, ceremonies });
+    res.json({
+      count: validCeremonies.length,
+      total: ceremonies.length,
+      unmatchedCount: unmatchedDetails.length,
+      unmatchedDetails,
+      ceremonies,
+    });
   } catch (error) {
     next(error);
   }
@@ -213,11 +290,20 @@ router.get('/', [
       include: {
         remains: { select: { id: true, name: true, familyName: true, familyPhone: true, expectedAttendees: true, ceremonyPreference: true } },
         hall: true,
-        host: { select: { id: true, realName: true, phone: true, skills: true } },
+        host: { select: { id: true, realName: true, phone: true, skills: true, role: true } },
       },
       orderBy: { startTime: 'asc' },
     });
-    res.json(ceremonies);
+    const enriched = ceremonies.map((c: any) => ({
+      ...c,
+      hostSkills: c.host?.skills ? c.host.skills.split(',').filter(Boolean) : [],
+      preferenceMatched: !c.remains?.ceremonyPreference || !c.host?.skills
+        ? false
+        : c.host.skills.includes(c.remains.ceremonyPreference) ||
+          c.host.skills.includes(PREFERENCE_SKILL_MAP[c.remains.ceremonyPreference as string] || '') ||
+          c.host.skills.includes(PREFERENCE_LABEL_MAP[c.remains.ceremonyPreference as string] || ''),
+    }));
+    res.json(enriched);
   } catch (error) {
     next(error);
   }

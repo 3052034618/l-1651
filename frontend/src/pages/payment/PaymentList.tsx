@@ -121,11 +121,24 @@ const PaymentList = () => {
       content: '确定要为该遗体生成正式账单吗？生成后可在账单列表中查看和缴费。',
       onOk: async () => {
         try {
-          await paymentApi.generateBill(remainsId);
-          message.success('账单已生成');
+          const res: any = await paymentApi.generateBill(remainsId);
+          message.success('账单已生成，已跳转到账单列表');
           setPreviewVisible(false);
-          loadData();
+          setPreviewRemains(null);
+          setPreviewFees(null);
+          await loadData();
           setActiveTab('bills');
+          if (res && res.payment && res.payment.remainsId) {
+            Modal.confirm({
+              title: '立即缴费',
+              content: `是否现在为该遗体（${previewRemains?.name || res.payment.remainsId}）办理缴费？`,
+              okText: '立即缴费',
+              cancelText: '稍后再说',
+              onOk: () => {
+                handlePay(res.payment.remainsId);
+              },
+            });
+          }
         } catch (e) {}
       },
     });

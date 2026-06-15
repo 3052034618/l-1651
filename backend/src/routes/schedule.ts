@@ -41,13 +41,14 @@ export const generateWeeklySchedule = async (startDate: Date) => {
     },
   });
 
-  if (users.length === 0) return [];
+  if (users.length === 0) return { schedules: [], coverageGaps: [], hostPoolCount: 0, crematorPoolCount: 0, receptionPoolCount: 0 };
 
   const schedules: any[] = [];
   const weeklyHours = new Map<string, number>();
   users.forEach((u) => weeklyHours.set(u.id, 0));
 
   const shifts = [ShiftType.MORNING, ShiftType.AFTERNOON, ShiftType.NIGHT];
+  const coverageGaps: any[] = [];
 
   for (let day = 0; day < 7; day++) {
     const date = dayjs(startDate).add(day, 'day').startOf('day').toDate();
@@ -100,6 +101,21 @@ export const generateWeeklySchedule = async (startDate: Date) => {
         }
       }
 
+      for (const skill of requiredSkills) {
+        if (!skillsCovered[shiftType].has(skill)) {
+          const fallback = candidates.filter((u) => !assignedForDay.has(u.id));
+          if (fallback.length > 0) {
+            const user = fallback[0];
+            shiftAssignments[shiftType].push(user.id);
+            assignedForDay.add(user.id);
+            const userSkill = roleToSkill(user.role);
+            if (userSkill) skillsCovered[shiftType].add(userSkill);
+            const currentHours = weeklyHours.get(user.id) || 0;
+            weeklyHours.set(user.id, currentHours + shiftHours);
+          }
+        }
+      }
+
       const minStaff = 2;
       const remainingSlots = minStaff - shiftAssignments[shiftType].length;
       if (remainingSlots > 0) {
@@ -108,9 +124,36 @@ export const generateWeeklySchedule = async (startDate: Date) => {
           const user = remainingUsers[i];
           shiftAssignments[shiftType].push(user.id);
           assignedForDay.add(user.id);
+          const userSkill = roleToSkill(user.role);
+          if (userSkill) skillsCovered[shiftType].add(userSkill);
           const currentHours = weeklyHours.get(user.id) || 0;
           weeklyHours.set(user.id, currentHours + shiftHours);
         }
+      }
+
+      const missingSkills = requiredSkills.filter((s) => !skillsCovered[shiftType].has(s));
+      if (missingSkills.length > 0) {
+        coverageGaps.push({
+          date: dayjs(date).format('YYYY-MM-DD'),
+          shift: shiftType,
+          missingSkills,
+          reason: missingSkills.map((s) => {
+            const skillPool = users.filter((u) => roleToSkill(u.role) === s);
+            if (skillPool.length === 0) return `${s}：无对应岗位人员`;
+            const available = skillPool.filter((u) => {
+              if (assignedForDay.has(u.id)) return false;
+              const currentHours = weeklyHours.get(u.id) || 0;
+              const maxHours = u.maxWorkHours * 7;
+              return currentHours + shiftHours <= maxHours;
+            });
+            if (available.length === 0) {
+              const allAssigned = skillPool.every((u) => assignedForDay.has(u.id));
+              if (allAssigned) return `${s}：${skillPool.length}人均已分配其他班次`;
+              return `${s}：所有${skillPool.length}人均达周工时上限`;
+            }
+            return `${s}：异常`;
+          }).join('；'),
+        });
       }
     }
 
@@ -134,10 +177,18 @@ export const generateWeeklySchedule = async (startDate: Date) => {
     }
   }
 
-  return schedules.map((s) => ({
+  const schedulesWithHours = schedules.map((s) => ({
     ...s,
     weekHours: weeklyHours.get(s.userId) || 0,
   }));
+
+  return {
+    schedules: schedulesWithHours,
+    coverageGaps,
+    hostPoolCount: users.filter((u) => roleToSkill(u.role) === 'HOST').length,
+    crematorPoolCount: users.filter((u) => roleToSkill(u.role) === 'CREMATOR').length,
+    receptionPoolCount: users.filter((u) => roleToSkill(u.role) === 'RECEPTION').length,
+  };
 };
 
 router.post('/generate-weekly', requireRoles(UserRole.ADMIN, UserRole.SUPERVISOR), [
@@ -163,7 +214,7 @@ router.post('/generate-weekly', requireRoles(UserRole.ADMIN, UserRole.SUPERVISOR
       });
     }
 
-    const schedules = await generateWeeklySchedule(startOfWeek);
+    const { schedules, coverageGaps, hostPoolCount, crematorPoolCount, receptionPoolCount } = await generateWeeklySchedule(startOfWeek);
 
     const created = await prisma.$transaction(async (tx) => {
       const result: any[] = [];
@@ -192,11 +243,32 @@ router.post('/generate-weekly', requireRoles(UserRole.ADMIN, UserRole.SUPERVISOR
       }
     }
 
+    const dailyCoverageGen: Record<string, any> = {};
+    for (let day = 0; day < 7; day++) {
+      const dateKey = dayjs(startOfWeek).add(day, 'day').format('YYYY-MM-DD');
+      dailyCoverageGen[dateKey] = { MORNING: {}, AFTERNOON: {}, NIGHT: {} };
+      for (const shift of ['MORNING', 'AFTERNOON', 'NIGHT']) {
+        const gap = coverageGaps.find((g) => g.date === dateKey && g.shift === shift);
+        const missing = gap ? gap.missingSkills : [];
+        dailyCoverageGen[dateKey][shift] = {
+          hasHost: !missing.includes('HOST'),
+          hasCremator: !missing.includes('CREMATOR'),
+          hasReception: !missing.includes('RECEPTION'),
+          allCovered: missing.length === 0,
+          missingSkills: missing,
+          reason: gap?.reason || '',
+        };
+      }
+    }
+
     res.json({
       count: created.length,
       schedules: created,
       userStats,
-      skills: {
+      coverageGaps,
+      dailyCoverage: dailyCoverageGen,
+      poolStats: { HOST: hostPoolCount, CREMATOR: crematorPoolCount, RECEPTION: receptionPoolCount },
+      skillsMap: {
         HOST: '司仪',
         CREMATOR: '火化员',
         RECEPTION: '接待员',
@@ -259,23 +331,79 @@ router.get('/', [
     }
 
     const dailyCoveragePlain: Record<string, any> = {};
+    const coverageGapsList: any[] = [];
     for (const [date, shifts] of Object.entries(dailyCoverage)) {
       dailyCoveragePlain[date] = {};
       for (const [shift, skills] of Object.entries(shifts)) {
+        const missing: string[] = [];
+        for (const req of ['HOST', 'CREMATOR', 'RECEPTION']) {
+          if (!skills.has(req)) missing.push(req);
+        }
         dailyCoveragePlain[date][shift] = {
           skills: Array.from(skills),
           hasHost: skills.has('HOST'),
           hasCremator: skills.has('CREMATOR'),
           hasReception: skills.has('RECEPTION'),
-          allCovered: skills.has('HOST') && skills.has('CREMATOR') && skills.has('RECEPTION'),
+          allCovered: missing.length === 0,
+          missingSkills: missing,
         };
+        if (missing.length > 0) {
+          const gapReasons: string[] = [];
+          for (const m of missing) {
+            const missingPool = schedules
+              .filter((s) => dayjs(s.date).format('YYYY-MM-DD') === date && roleToSkill((s.user as any).role) === m)
+              .map((s) => s.userId);
+            const uniquePool = Array.from(new Set(missingPool));
+            if (uniquePool.length === 0) {
+              gapReasons.push(`${m}：无对应岗位人员`);
+            } else {
+              const assignedThatDay = schedules.filter(
+                (s) => dayjs(s.date).format('YYYY-MM-DD') === date &&
+                  uniquePool.includes(s.userId) &&
+                  s.shiftType !== ShiftType.DAY_OFF &&
+                  s.shiftType !== shift
+              );
+              if (assignedThatDay.length >= uniquePool.length) {
+                gapReasons.push(`${m}：${uniquePool.length}人均已分配其他班次`);
+              } else {
+                const onOff = schedules.filter(
+                  (s) => dayjs(s.date).format('YYYY-MM-DD') === date &&
+                    uniquePool.includes(s.userId) &&
+                    s.shiftType === ShiftType.DAY_OFF
+                );
+                if (onOff.length > 0) {
+                  gapReasons.push(`${m}：${onOff.length}人休息`);
+                } else {
+                  gapReasons.push(`${m}：工时不足或缺席`);
+                }
+              }
+            }
+          }
+          coverageGapsList.push({
+            date,
+            shift,
+            missingSkills: missing,
+            reason: gapReasons.join('；'),
+          });
+        }
       }
     }
+
+    const allUsers = await prisma.user.findMany({
+      where: { role: { in: [UserRole.STAFF, UserRole.HOST, UserRole.CREMATOR, UserRole.RECEPTION] } },
+      select: { role: true },
+    });
 
     res.json({
       schedules,
       userStats,
       dailyCoverage: dailyCoveragePlain,
+      coverageGaps: coverageGapsList,
+      poolStats: {
+        HOST: allUsers.filter((u) => u.role === UserRole.HOST).length,
+        CREMATOR: allUsers.filter((u) => u.role === UserRole.CREMATOR).length,
+        RECEPTION: allUsers.filter((u) => u.role === UserRole.RECEPTION).length,
+      },
       skillsMap: {
         HOST: '司仪',
         CREMATOR: '火化员',
